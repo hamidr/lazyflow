@@ -1,6 +1,7 @@
 //! Internal pull operator structs used by pipeline operators.
 
-use std::collections::VecDeque;
+use std::cmp::{Ordering, Reverse};
+use std::collections::{BinaryHeap, VecDeque};
 use std::future::Future;
 use std::sync::Arc;
 
@@ -1069,6 +1070,72 @@ impl<B: Send + 'static> PullOperator<B> for PullUnNoneTerminate<B> {
                 }
                 None => Ok(None),
             }
+        })
+    }
+}
+
+/// An element paired with its sort key. Ordered by key only, so the
+/// element type itself need not be `Ord`.
+pub(super) struct Keyed<K, B> {
+    pub(super) key: K,
+    pub(super) item: B,
+}
+
+impl<K: PartialEq, B> PartialEq for Keyed<K, B> {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
+impl<K: Eq, B> Eq for Keyed<K, B> {}
+
+impl<K: PartialOrd, B> PartialOrd for Keyed<K, B> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.key.partial_cmp(&other.key)
+    }
+}
+
+impl<K: Ord, B> Ord for Keyed<K, B> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.key.cmp(&other.key)
+    }
+}
+
+/// Bounded top-N operator: keeps at most `k` elements with the largest
+/// keys in a min-heap (O(k) memory), then emits them in descending key
+/// order once the child is exhausted.
+pub(super) struct PullTopN<B: Send + 'static, K: Ord + Send + 'static> {
+    pub(super) child: Box<dyn PullOperator<B>>,
+    pub(super) k: usize,
+    pub(super) key_fn: Arc<dyn Fn(&B) -> K + Send + Sync>,
+    pub(super) heap: BinaryHeap<Reverse<Keyed<K, B>>>,
+    pub(super) done: bool,
+}
+
+impl<B: Send + 'static, K: Ord + Send + 'static> PullOperator<B> for PullTopN<B, K> {
+    fn next_chunk(&mut self) -> ChunkFut<'_, B> {
+        Box::pin(async move {
+            if self.done || self.k == 0 {
+                self.done = true;
+                return Ok(None);
+            }
+            while let Some(chunk) = self.child.next_chunk().await? {
+                for item in chunk {
+                    let key = (self.key_fn)(&item);
+                    self.heap.push(Reverse(Keyed { key, item }));
+                    if self.heap.len() > self.k {
+                        self.heap.pop();
+                    }
+                }
+            }
+            self.done = true;
+            // `into_sorted_vec` on `Reverse<_>` yields descending key order.
+            let out: Vec<B> = std::mem::take(&mut self.heap)
+                .into_sorted_vec()
+                .into_iter()
+                .map(|Reverse(keyed)| keyed.item)
+                .collect();
+            if out.is_empty() { Ok(None) } else { Ok(Some(out)) }
         })
     }
 }

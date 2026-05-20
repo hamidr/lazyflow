@@ -1305,6 +1305,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn top_n_keeps_largest_in_descending_order() {
+        let result = Pipe::from_iter(vec![3, 1, 4, 1, 5, 9, 2, 6])
+            .top_n(3, |x| *x)
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(result, vec![9, 6, 5]);
+    }
+
+    #[tokio::test]
+    async fn top_n_with_k_larger_than_input_returns_all_sorted() {
+        let result = Pipe::from_iter(vec![2, 1, 3])
+            .top_n(10, |x| *x)
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(result, vec![3, 2, 1]);
+    }
+
+    #[tokio::test]
+    async fn top_n_with_zero_k_yields_empty_stream() {
+        let result = Pipe::from_iter(vec![1, 2, 3])
+            .top_n(0, |x| *x)
+            .collect()
+            .await
+            .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn top_n_ranks_by_key_not_element() {
+        let result = Pipe::from_iter(vec!["a", "bbbb", "cc", "ddd"])
+            .top_n(2, |s| s.len())
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(result, vec!["bbbb", "ddd"]);
+    }
+
+    #[tokio::test]
+    async fn top_n_pipe_is_reusable_after_clone() {
+        let pipe = Pipe::from_iter(vec![5, 2, 8, 1]).top_n(2, |x| *x);
+        let first = pipe.clone().collect().await.unwrap();
+        let second = pipe.collect().await.unwrap();
+        assert_eq!(first, vec![8, 5]);
+        assert_eq!(second, vec![8, 5]);
+    }
+
+    #[tokio::test]
     async fn distinct_removes_all_duplicates() {
         let result = Pipe::from_iter(vec![1, 2, 3, 2, 1, 4, 3])
             .distinct()

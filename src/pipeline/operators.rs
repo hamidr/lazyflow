@@ -522,6 +522,33 @@ impl<B: Send + 'static> Pipe<B> {
         })
     }
 
+    /// Keep only the `k` elements with the largest keys, emitted in
+    /// descending key order.
+    ///
+    /// **Memory**: O(k). Unlike sorting the whole stream, this holds a
+    /// bounded min-heap of at most `k` elements regardless of input
+    /// length. It is still *blocking* in latency: nothing is emitted
+    /// until the input is fully drained.
+    ///
+    /// `k == 0` yields an empty stream without draining the input.
+    pub fn top_n<K: Ord + Send + 'static>(
+        self,
+        k: usize,
+        key: impl Fn(&B) -> K + Send + Sync + 'static,
+    ) -> Self {
+        let parent = self.factory;
+        let key: Arc<dyn Fn(&B) -> K + Send + Sync> = Arc::new(key);
+        Pipe::from_factory(move || {
+            Box::new(super::pull_ops::PullTopN {
+                child: parent(),
+                k,
+                key_fn: Arc::clone(&key),
+                heap: std::collections::BinaryHeap::new(),
+                done: false,
+            })
+        })
+    }
+
     /// Pair each element with its index: `(0, a), (1, b), (2, c), ...`
     pub fn enumerate(self) -> Pipe<(usize, B)> {
         self.scan(0usize, |idx, item| {
