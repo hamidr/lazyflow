@@ -972,7 +972,7 @@ dependencies = [
 
 [[package]]
 name = "lazyflow"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "criterion",
  "futures-core",
@@ -998,7 +998,7 @@ dependencies = [
 
 [[package]]
 name = "lazyflow-http"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "axum 0.8.9",
  "futures-core",
@@ -1013,7 +1013,7 @@ dependencies = [
 
 [[package]]
 name = "lazyflow-io"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "lazyflow",
  "tokio",
@@ -1021,7 +1021,7 @@ dependencies = [
 
 [[package]]
 name = "lazyflow-macros"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "proc-macro2",
  "quote",

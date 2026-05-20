@@ -10,7 +10,7 @@ keywords = ["async", "streaming", "grpc", "tonic", "protobuf"]
 categories = ["asynchronous", "network-programming"]
 
 [dependencies]
-lazyflow = { path = "..", version = "0.6.2" }
+lazyflow = { path = "..", version = "0.7.0" }
 tonic = { version = "0.12", default-features = false, features = ["transport", "channel"] }
 futures-core = "0.3"
 
