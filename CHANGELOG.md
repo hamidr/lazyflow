@@ -4,6 +4,17 @@ All notable changes to the lazyflow workspace are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.0] - 2026-05-20
+
+### Added
+- **lazyflow**: `Pipe::fold_collect` and `Pipe::try_fold_collect`, a
+  blocking-operator primitive that drains the input, transforms the whole
+  buffer, and re-emits it as a stream, replacing the hand-written
+  collect-then-`from_iter` idiom.
+- **lazyflow**: `Pipe::top_n`, a bounded top-N operator that keeps the `k`
+  highest-ranked elements in O(k) memory and O(N log k) time, emitting them
+  in descending key order.
+
 ## [0.8.0] - 2026-05-20
 
 ### Changed
