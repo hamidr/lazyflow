@@ -4,6 +4,16 @@ All notable changes to the lazyflow workspace are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.0] - 2026-05-20
+
+### Changed
+- Renamed the crate from `pipe` to `lazyflow` for crates.io availability; the
+  workspace now publishes as `lazyflow`, `lazyflow-macros`, `lazyflow-io`,
+  `lazyflow-http`, and `lazyflow-grpc`
+- Updated dependencies to the latest semver-compatible versions
+- Dropped the explicit version from the `lazyflow-io` dev-dependency so the
+  workspace publishes cleanly
+
 ## [0.6.2] - 2026-04-14
 
 ### Added
