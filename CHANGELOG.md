@@ -4,6 +4,15 @@ All notable changes to the lazyflow workspace are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.0] - 2026-05-20
+
+### Changed
+- **lazyflow-grpc**: upgraded tonic from 0.12 to 0.14. The prost codec is now
+  a separate crate, so consumers writing server-side RPCs must add `tonic-prost`
+  and switch `build.rs` codegen from `tonic-build` to `tonic-prost-build`.
+- Bumped the workspace to 0.8.0 (`lazyflow`, `lazyflow-macros`, `lazyflow-io`,
+  `lazyflow-http`, `lazyflow-grpc`)
+
 ## [0.7.0] - 2026-05-20
 
 ### Changed

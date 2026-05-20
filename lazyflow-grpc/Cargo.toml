@@ -1,6 +1,6 @@
 [package]
 name = "lazyflow-grpc"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2024"
 rust-version = "1.85"
 description = "gRPC connectors for lazyflow -- tonic Streaming<T> source and server response adapter"
@@ -10,19 +10,21 @@ keywords = ["async", "streaming", "grpc", "tonic", "protobuf"]
 categories = ["asynchronous", "network-programming"]
 
 [dependencies]
-lazyflow = { path = "..", version = "0.7.0" }
-tonic = { version = "0.12", default-features = false, features = ["transport", "channel"] }
+lazyflow = { path = "..", version = "0.8.0" }
+tonic = { version = "0.14", default-features = false, features = ["transport", "channel"] }
 futures-core = "0.3"
 
 [features]
 default = ["server"]
-server = ["tonic/codegen", "tonic/prost"]
+# `codegen` re-exports `tonic::async_trait`, used by server-side RPC impls.
+server = ["tonic/codegen"]
 
 [build-dependencies]
-tonic-build = "0.12"
+tonic-prost-build = "0.14"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
 tokio-stream = "0.1"
-tonic = { version = "0.12", features = ["codegen", "prost"] }
-prost = "0.13"
+tonic = { version = "0.14", features = ["codegen"] }
+tonic-prost = "0.14"
+prost = "0.14"
