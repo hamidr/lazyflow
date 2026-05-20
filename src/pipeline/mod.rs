@@ -1249,6 +1249,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fold_collect_sorts_the_whole_buffer() {
+        let result = Pipe::from_iter(vec![3, 1, 4, 1, 5, 9, 2, 6])
+            .fold_collect(|mut v| {
+                v.sort_unstable();
+                v
+            })
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(result, vec![1, 1, 2, 3, 4, 5, 6, 9]);
+    }
+
+    #[tokio::test]
+    async fn fold_collect_can_change_element_type() {
+        let result = Pipe::from_iter(vec![1, 2, 3])
+            .fold_collect(|v| vec![v.len()])
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(result, vec![3]);
+    }
+
+    #[tokio::test]
+    async fn fold_collect_empty_output_yields_empty_stream() {
+        let result = Pipe::from_iter(vec![1, 2, 3])
+            .fold_collect(|_| Vec::<i32>::new())
+            .collect()
+            .await
+            .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fold_collect_pipe_is_reusable_after_clone() {
+        let pipe = Pipe::from_iter(vec![2, 1, 3]).fold_collect(|mut v| {
+            v.sort_unstable();
+            v
+        });
+        let first = pipe.clone().collect().await.unwrap();
+        let second = pipe.collect().await.unwrap();
+        assert_eq!(first, vec![1, 2, 3]);
+        assert_eq!(second, vec![1, 2, 3]);
+    }
+
+    #[tokio::test]
+    async fn try_fold_collect_propagates_transform_error() {
+        let result = Pipe::from_iter(vec![1, 2, 3])
+            .try_fold_collect(|_| {
+                Err::<Vec<i32>, _>(crate::pull::PipeError::Custom("rejected".into()))
+            })
+            .collect()
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
     async fn distinct_removes_all_duplicates() {
         let result = Pipe::from_iter(vec![1, 2, 3, 2, 1, 4, 3])
             .distinct()

@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::pull::{ChunkFut, PipeError, PullOperator, YIELD_AFTER_EMPTY};
+use crate::pull::{ChunkFut, PipeError, PullOperator, YIELD_AFTER_EMPTY, collect_all};
 
 use super::Pipe;
 
@@ -1069,6 +1069,29 @@ impl<B: Send + 'static> PullOperator<B> for PullUnNoneTerminate<B> {
                 }
                 None => Ok(None),
             }
+        })
+    }
+}
+
+/// Blocking operator: drains the child to completion, transforms the
+/// whole buffer, then emits the result as a single chunk.
+pub(super) struct PullFoldCollect<B: Send + 'static, C: Send + 'static> {
+    pub(super) child: Box<dyn PullOperator<B>>,
+    #[allow(clippy::type_complexity)]
+    pub(super) transform: Arc<dyn Fn(Vec<B>) -> Result<Vec<C>, PipeError> + Send + Sync>,
+    pub(super) done: bool,
+}
+
+impl<B: Send + 'static, C: Send + 'static> PullOperator<C> for PullFoldCollect<B, C> {
+    fn next_chunk(&mut self) -> ChunkFut<'_, C> {
+        Box::pin(async move {
+            if self.done {
+                return Ok(None);
+            }
+            self.done = true;
+            let buffer = collect_all(&mut *self.child).await?;
+            let out = (self.transform)(buffer)?;
+            if out.is_empty() { Ok(None) } else { Ok(Some(out)) }
         })
     }
 }

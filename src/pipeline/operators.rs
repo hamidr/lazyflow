@@ -475,6 +475,53 @@ impl<B: Send + 'static> Pipe<B> {
         })
     }
 
+    /// Drain the entire input, transform the whole buffer, then emit
+    /// the result as a new stream.
+    ///
+    /// This is the sanctioned primitive for *blocking operators*:
+    /// stages that cannot produce their first output row until every
+    /// input row has been seen (sort, dedup, top-N, group-by). It
+    /// replaces the hand-written
+    /// `let v = child.collect().await?; Pipe::from_iter(transform(v))`
+    /// idiom with a single combinator that needs no sync bridge.
+    ///
+    /// **Memory**: buffers 100% of the input before emitting. For
+    /// operators that can emit incrementally, prefer a streaming
+    /// combinator (e.g. [`group_adjacent_by`](Self::group_adjacent_by)
+    /// or a bounded [`scan`](Self::scan)).
+    ///
+    /// See [`try_fold_collect`](Self::try_fold_collect) for a transform
+    /// that can fail.
+    pub fn fold_collect<C: Send + 'static>(
+        self,
+        transform: impl Fn(Vec<B>) -> Vec<C> + Send + Sync + 'static,
+    ) -> Pipe<C> {
+        self.try_fold_collect(move |buffer| Ok(transform(buffer)))
+    }
+
+    /// Like [`fold_collect`](Self::fold_collect), but the transform may
+    /// fail. An `Err` aborts the pipe with that error.
+    pub fn try_fold_collect<C: Send + 'static>(
+        self,
+        transform: impl Fn(Vec<B>) -> Result<Vec<C>, crate::pull::PipeError>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Pipe<C> {
+        let parent = self.factory;
+        #[allow(clippy::type_complexity)]
+        let transform: Arc<
+            dyn Fn(Vec<B>) -> Result<Vec<C>, crate::pull::PipeError> + Send + Sync,
+        > = Arc::new(transform);
+        Pipe::from_factory(move || {
+            Box::new(super::pull_ops::PullFoldCollect {
+                child: parent(),
+                transform: Arc::clone(&transform),
+                done: false,
+            })
+        })
+    }
+
     /// Pair each element with its index: `(0, a), (1, b), (2, c), ...`
     pub fn enumerate(self) -> Pipe<(usize, B)> {
         self.scan(0usize, |idx, item| {
