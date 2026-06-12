@@ -30,6 +30,33 @@ impl<B: Send + 'static> Pipe<B> {
         fold_all(&mut *root, init, f).await
     }
 
+    /// Drive the pipeline chunk by chunk, folding each whole chunk into
+    /// the accumulator. `f` returns a [`std::ops::ControlFlow`]:
+    /// `Continue(acc)` keeps pulling the next chunk, `Break(acc)` stops
+    /// immediately at this chunk boundary without pulling further.
+    ///
+    /// Unlike [`fold`](Self::fold) (one call per element), this hands
+    /// the closure a whole `Vec<B>` chunk at once, so a consumer can
+    /// amortize per-item work -- accounting, metering, budget checks --
+    /// to once per chunk, and short-circuit cooperatively without a
+    /// separate cancel token. Peak buffering is bounded to the items
+    /// already pulled plus the in-flight chunk.
+    pub async fn try_fold_chunks<C: Send + 'static>(
+        self,
+        init: C,
+        mut f: impl FnMut(C, Vec<B>) -> std::ops::ControlFlow<C, C> + Send,
+    ) -> Result<C, PipeError> {
+        let mut root = (self.factory)();
+        let mut acc = init;
+        while let Some(chunk) = root.next_chunk().await? {
+            match f(acc, chunk) {
+                std::ops::ControlFlow::Continue(c) => acc = c,
+                std::ops::ControlFlow::Break(c) => return Ok(c),
+            }
+        }
+        Ok(acc)
+    }
+
     /// Reduce all elements using the first element as the initial
     /// accumulator. Returns `None` for empty streams.
     pub async fn reduce(self, f: impl Fn(B, B) -> B + Send) -> Result<Option<B>, PipeError> {
@@ -142,5 +169,47 @@ impl<A: Clone + Send + Sync + 'static, B: Clone + Send + Sync + 'static> Pipe<(A
         let left = iter.next().unwrap().map(|(a, _)| a);
         let right = iter.next().unwrap().map(|(_, b)| b);
         (left, right)
+    }
+}
+
+#[cfg(test)]
+mod try_fold_chunks_tests {
+    use super::Pipe;
+    use std::ops::ControlFlow;
+
+    #[tokio::test]
+    async fn breaks_at_chunk_boundary() {
+        // from_iter chunks at 256; a Break after the first chunk must
+        // stop pulling, so far fewer than all 1000 items are seen.
+        let out = Pipe::from_iter(0..1000)
+            .try_fold_chunks(Vec::new(), |mut acc: Vec<i32>, chunk| {
+                let first = acc.is_empty();
+                acc.extend(chunk);
+                if first {
+                    ControlFlow::Break(acc)
+                } else {
+                    ControlFlow::Continue(acc)
+                }
+            })
+            .await
+            .unwrap();
+        assert!(
+            out.len() < 1000,
+            "Break must stop early, got {} items",
+            out.len()
+        );
+        assert!(!out.is_empty(), "the first chunk still lands");
+    }
+
+    #[tokio::test]
+    async fn continue_drains_every_item() {
+        let out = Pipe::from_iter(0..1000)
+            .try_fold_chunks(Vec::new(), |mut acc: Vec<i32>, chunk| {
+                acc.extend(chunk);
+                ControlFlow::Continue(acc)
+            })
+            .await
+            .unwrap();
+        assert_eq!(out.len(), 1000, "Continue drains the whole pipe");
     }
 }
