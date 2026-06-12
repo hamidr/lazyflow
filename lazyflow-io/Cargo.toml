@@ -1,6 +1,6 @@
 [package]
 name = "lazyflow-io"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 rust-version = "1.85"
 description = "I/O constructors for lazyflow -- TCP, UDP, and file convenience APIs"
@@ -11,5 +11,5 @@ categories = ["asynchronous", "network-programming"]
 exclude = [".github/"]
 
 [dependencies]
-lazyflow = { path = "..", version = "0.9.0" }
+lazyflow = { path = "..", version = "0.10.0" }
 tokio = { version = "1", features = ["net", "fs", "io-util", "rt"] }
