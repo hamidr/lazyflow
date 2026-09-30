@@ -503,10 +503,7 @@ impl<B: Send + 'static> Pipe<B> {
     /// fail. An `Err` aborts the pipe with that error.
     pub fn try_fold_collect<C: Send + 'static>(
         self,
-        transform: impl Fn(Vec<B>) -> Result<Vec<C>, crate::pull::PipeError>
-        + Send
-        + Sync
-        + 'static,
+        transform: impl Fn(Vec<B>) -> Result<Vec<C>, crate::pull::PipeError> + Send + Sync + 'static,
     ) -> Pipe<C> {
         let parent = self.factory;
         #[allow(clippy::type_complexity)]

@@ -159,6 +159,7 @@ async fn pipe_error_closed_maps_to_cancelled() {
 
 #[tokio::test]
 async fn pipe_error_retry_exhausted_maps_to_unavailable() {
-    let status = lazyflow_grpc::serve::pipe_error_to_status(lazyflow::pull::PipeError::RetryExhausted);
+    let status =
+        lazyflow_grpc::serve::pipe_error_to_status(lazyflow::pull::PipeError::RetryExhausted);
     assert_eq!(status.code(), tonic::Code::Unavailable);
 }

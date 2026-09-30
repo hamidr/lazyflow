@@ -1135,7 +1135,11 @@ impl<B: Send + 'static, K: Ord + Send + 'static> PullOperator<B> for PullTopN<B,
                 .into_iter()
                 .map(|Reverse(keyed)| keyed.item)
                 .collect();
-            if out.is_empty() { Ok(None) } else { Ok(Some(out)) }
+            if out.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(out))
+            }
         })
     }
 }
@@ -1158,7 +1162,11 @@ impl<B: Send + 'static, C: Send + 'static> PullOperator<C> for PullFoldCollect<B
             self.done = true;
             let buffer = collect_all(&mut *self.child).await?;
             let out = (self.transform)(buffer)?;
-            if out.is_empty() { Ok(None) } else { Ok(Some(out)) }
+            if out.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(out))
+            }
         })
     }
 }

@@ -48,8 +48,8 @@ pub mod stream;
 pub mod topic;
 pub mod transform;
 
-pub use operator::PipeResult;
 pub use lazyflow_macros::{operator, pipe_fn, pull_operator};
+pub use operator::PipeResult;
 
 /// Construct a `Pipe` from literal elements.
 ///
