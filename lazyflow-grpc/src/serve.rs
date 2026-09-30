@@ -92,3 +92,117 @@ pub fn pipe_error_to_status(err: PipeError) -> tonic::Status {
         },
     }
 }
+
+/// Server builder (ADR-004 Phase 1): wraps `tonic::transport::Server`,
+/// eliminating the TLS/mTLS/interceptor bootstrap boilerplate every
+/// lazyflow-grpc service otherwise repeats. Deliberately thin -- `.build()`
+/// hands back tonic's own `Server`, so `.serve()`, `.serve_with_shutdown()`,
+/// `.add_service()`, and every other tonic transport API this wrapper does
+/// not re-expose keep working exactly as they do today. lazyflow-grpc adds
+/// convenience over tonic, it does not replace it.
+///
+/// ```ignore
+/// use lazyflow_grpc::serve;
+///
+/// # #[cfg(feature = "tls")]
+/// # async fn example(cert_pem: &[u8], key_pem: &[u8], svc: impl Clone) -> Result<(), Box<dyn std::error::Error>> {
+/// let server = serve::Server::builder()
+///     .tls(cert_pem, key_pem)
+///     .build()?;
+///
+/// server.serve("0.0.0.0:50051".parse()?, svc).await?;
+/// # Ok(())
+/// # }
+/// ```
+pub struct Server<L = tower::layer::util::Identity> {
+    inner: tonic::transport::Server<L>,
+    #[cfg(feature = "tls")]
+    tls: Option<tonic::transport::ServerTlsConfig>,
+}
+
+impl Server<tower::layer::util::Identity> {
+    /// Start building a server. Mirrors `tonic::transport::Server::builder()`.
+    pub fn builder() -> Self {
+        Server {
+            inner: tonic::transport::Server::builder(),
+            #[cfg(feature = "tls")]
+            tls: None,
+        }
+    }
+}
+
+impl<L> Server<L> {
+    /// Set the server's TLS identity from PEM-encoded certificate and
+    /// private key. Requires the `tls` feature.
+    #[cfg(feature = "tls")]
+    pub fn tls(mut self, cert_pem: impl AsRef<[u8]>, key_pem: impl AsRef<[u8]>) -> Self {
+        let identity = tonic::transport::Identity::from_pem(cert_pem, key_pem);
+        let cfg = self.tls.take().unwrap_or_default().identity(identity);
+        self.tls = Some(cfg);
+        self
+    }
+
+    /// Require and validate client certificates against a PEM-encoded CA
+    /// (mutual TLS). Has no effect unless `.tls()` is also set. Requires
+    /// the `tls` feature.
+    #[cfg(feature = "tls")]
+    pub fn client_ca(mut self, ca_pem: impl AsRef<[u8]>) -> Self {
+        let cert = tonic::transport::Certificate::from_pem(ca_pem);
+        let cfg = self.tls.take().unwrap_or_default().client_ca_root(cert);
+        self.tls = Some(cfg);
+        self
+    }
+
+    /// Make client certificate presentation optional rather than required.
+    /// Has no effect unless `.client_ca()` is also set. Requires the `tls`
+    /// feature.
+    #[cfg(feature = "tls")]
+    pub fn client_auth_optional(mut self, optional: bool) -> Self {
+        let cfg = self
+            .tls
+            .take()
+            .unwrap_or_default()
+            .client_auth_optional(optional);
+        self.tls = Some(cfg);
+        self
+    }
+
+    /// Wrap every request through a tonic [`Interceptor`](tonic::service::Interceptor)
+    /// (e.g. auth). At most one interceptor call is meaningful here; an
+    /// interceptor that needs to run several checks composes them itself.
+    pub fn interceptor<I>(
+        self,
+        interceptor: I,
+    ) -> Server<tower::layer::util::Stack<tonic::service::InterceptorLayer<I>, L>>
+    where
+        I: tonic::service::Interceptor + Clone,
+    {
+        Server {
+            inner: self
+                .inner
+                .layer(tonic::service::InterceptorLayer::new(interceptor)),
+            #[cfg(feature = "tls")]
+            tls: self.tls,
+        }
+    }
+
+    /// Apply the configured TLS settings (if any) and hand back tonic's
+    /// own `Server`, ready for `.serve()`, `.serve_with_shutdown()`,
+    /// `.add_service()`, or any tonic transport configuration
+    /// (custom codecs, additional Tower layers, health checks,
+    /// reflection) this wrapper does not re-expose. Fails only if the
+    /// TLS identity or CA is malformed.
+    pub fn build(self) -> Result<tonic::transport::Server<L>, tonic::transport::Error> {
+        #[cfg(feature = "tls")]
+        {
+            match self.tls {
+                Some(tls) => self.inner.tls_config(tls),
+                None => Ok(self.inner),
+            }
+        }
+        #[cfg(not(feature = "tls"))]
+        {
+            Ok(self.inner)
+        }
+    }
+}

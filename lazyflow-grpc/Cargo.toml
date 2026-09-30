@@ -12,12 +12,17 @@ categories = ["asynchronous", "network-programming"]
 [dependencies]
 lazyflow = { path = "..", version = "0.10.0" }
 tonic = { version = "0.14", default-features = false, features = ["transport", "channel"] }
+tower = { version = "0.5", default-features = false }
 futures-core = "0.3"
 
 [features]
 default = ["server"]
 # `codegen` re-exports `tonic::async_trait`, used by server-side RPC impls.
 server = ["tonic/codegen"]
+# `serve::Server`'s `.tls()`/`.client_ca()` (ADR-004 Phase 1). Separate
+# from `server` since not every service needs TLS, and rustls is not
+# free to compile in.
+tls = ["tonic/tls-ring"]
 
 [build-dependencies]
 tonic-prost-build = "0.14"
@@ -28,3 +33,4 @@ tokio-stream = "0.1"
 tonic = { version = "0.14", features = ["codegen"] }
 tonic-prost = "0.14"
 prost = "0.14"
+rcgen = "0.13"

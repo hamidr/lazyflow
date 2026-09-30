@@ -1,6 +1,6 @@
 # ADR-004: gRPC Server Handler -- Pipe-Native Service Definitions
 
-**Status**: Proposed
+**Status**: Accepted (Phase 1 shipped 2026-09-30; Phase 2 still deferred)
 **Date**: 2026-04-11
 **Supersedes**: --
 **Related**: [ADR-003](ADR-003-grpc-connector.md) (extends gRPC connector with server-side support)
@@ -251,3 +251,49 @@ This is deferred because:
   code may break on tonic version bumps if generated trait signatures
   change. Mitigation: defer until Phase 1 proves the handler pattern,
   then decide if the ergonomic gain justifies the maintenance cost.
+
+## Implementation notes (Phase 1, 2026-09-30)
+
+`lazyflow_grpc::serve::Server` (`lazyflow-grpc/src/serve.rs`), builder
+methods `.tls()`, `.client_ca()`, `.client_auth_optional()` (all gated
+behind a new `tls` Cargo feature, `tonic/tls-ring`; not every service needs
+TLS and rustls is not free to compile in), `.interceptor()`, `.build()`.
+
+Two deliberate deviations from the pseudocode above, both narrowing scope
+rather than widening it:
+
+- `.build()` returns `tonic::transport::Server<L>` directly (the real
+  tonic type) instead of a separate wrapper with its own `.serve()`
+  variants. Tonic's `Server<L>` already has `.serve(addr, svc)`,
+  `.serve_with_shutdown(addr, svc, signal)`, `.serve_with_incoming(...)`,
+  and `.add_service(...)` built in; re-wrapping them would mean copying
+  tonic's own (nontrivial) generic trait bounds for no behavioral gain,
+  and would be exactly the "server builder duplicates tonic's `Server`
+  surface" risk this ADR already names. `.build()` *is* the escape hatch:
+  there is no separate `into_tonic_builder()`.
+- `.interceptor()` is called at most once per builder chain (chaining a
+  second call is still expressible (it wraps the whole
+  `Server<Stack<..., L>>` again), but is not the ergonomic path. The
+  ADR's own Decision text scoped Phase 1 to "handler traits and routing"
+  as Phase 2; multi-interceptor composition is the same shape of
+  question and is left to the caller (compose checks inside one
+  `Interceptor` impl) rather than adding stacking sugar nobody asked for
+  yet.
+
+TDD: `lazyflow-grpc/tests/serve_integration.rs` gained
+`builder_server_round_trips_through_tonic_serve_with_incoming` (the core
+claim: `.build()`'s output behaves exactly like a hand-built
+`tonic::transport::Server`), `builder_server_stops_on_shutdown_signal`
+(graceful shutdown unaffected by the wrapper),
+`builder_server_interceptor_rejects_before_the_service_runs` (the auth
+use case named in Context), and `builder_server_tls_handshake_round_trips`
+(gated `#[cfg(feature = "tls")]`, a real TLS handshake against a
+`rcgen`-generated self-signed certificate). `cargo test --workspace`
+(default features) and `cargo test -p lazyflow-grpc --features tls` both
+green; `cargo clippy --workspace --all-targets -- -D warnings` clean for
+both feature combinations; `cargo fmt --all` clean.
+
+Phase 1's own "migrate knot-server to use the builder as validation"
+deliverable is not done as part of this change: knot-server pins
+`lazyflow-grpc` from crates.io, not this checkout, so migrating it needs a
+version bump and publish first, tracked separately.

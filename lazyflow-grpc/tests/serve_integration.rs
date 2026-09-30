@@ -163,3 +163,170 @@ async fn pipe_error_retry_exhausted_maps_to_unavailable() {
         lazyflow_grpc::serve::pipe_error_to_status(lazyflow::pull::PipeError::RetryExhausted);
     assert_eq!(status.code(), tonic::Code::Unavailable);
 }
+
+// ADR-004 Phase 1: `serve::Server` builder.
+
+/// `serve::Server::builder().build()` hands back a real
+/// `tonic::transport::Server`, so `.serve_with_incoming()` (and every other
+/// tonic transport method) works exactly as it does when built directly.
+/// This is the core claim: the builder adds convenience, it does not
+/// replace tonic's API.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn builder_server_round_trips_through_tonic_serve_with_incoming() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        lazyflow_grpc::serve::Server::builder()
+            .build()
+            .unwrap()
+            .serve_with_incoming(
+                TestStreamingServer::new(PipeBackedService),
+                tokio_stream::wrappers::TcpListenerStream::new(listener),
+            )
+            .await
+            .unwrap();
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let mut client = TestStreamingClient::connect(format!("http://{addr}"))
+        .await
+        .unwrap();
+    let response = client
+        .server_stream(Request::new(StreamRequest { count: 5 }))
+        .await
+        .unwrap();
+    let items: Vec<StreamItem> = lazyflow_grpc::streaming::from_tonic(response.into_inner())
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(items.len(), 5);
+}
+
+/// `.serve_with_incoming_shutdown` on the builder's `Server` stops
+/// accepting once the signal future resolves, same as raw tonic. Proves
+/// the builder doesn't interfere with graceful shutdown.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn builder_server_stops_on_shutdown_signal() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+
+    let handle = tokio::spawn(async move {
+        lazyflow_grpc::serve::Server::builder()
+            .build()
+            .unwrap()
+            .serve_with_incoming_shutdown(
+                TestStreamingServer::new(PipeBackedService),
+                tokio_stream::wrappers::TcpListenerStream::new(listener),
+                async {
+                    let _ = shutdown_rx.await;
+                },
+            )
+            .await
+            .unwrap();
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // The server is up before shutdown: one request succeeds.
+    let mut client = TestStreamingClient::connect(format!("http://{addr}"))
+        .await
+        .unwrap();
+    client
+        .server_stream(Request::new(StreamRequest { count: 1 }))
+        .await
+        .unwrap();
+
+    shutdown_tx.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(2), handle)
+        .await
+        .expect("serve_with_incoming_shutdown must return once the signal fires")
+        .unwrap();
+}
+
+/// `.interceptor()` runs on every request before it reaches the service --
+/// the core mechanism ADR-004 asks for (auth, request logging, etc.). A
+/// rejecting interceptor stops the request from ever reaching
+/// `PipeBackedService`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn builder_server_interceptor_rejects_before_the_service_runs() {
+    #[derive(Clone)]
+    struct RejectAll;
+    impl tonic::service::Interceptor for RejectAll {
+        fn call(&mut self, _req: Request<()>) -> Result<Request<()>, Status> {
+            Err(Status::permission_denied("rejected by interceptor"))
+        }
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        lazyflow_grpc::serve::Server::builder()
+            .interceptor(RejectAll)
+            .build()
+            .unwrap()
+            .serve_with_incoming(
+                TestStreamingServer::new(PipeBackedService),
+                tokio_stream::wrappers::TcpListenerStream::new(listener),
+            )
+            .await
+            .unwrap();
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let mut client = TestStreamingClient::connect(format!("http://{addr}"))
+        .await
+        .unwrap();
+    let err = client
+        .server_stream(Request::new(StreamRequest { count: 5 }))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    assert!(err.message().contains("rejected by interceptor"));
+}
+
+#[cfg(feature = "tls")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn builder_server_tls_handshake_round_trips() {
+    let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+    let cert_pem = cert.cert.pem();
+    let key_pem = cert.key_pair.serialize_pem();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        lazyflow_grpc::serve::Server::builder()
+            .tls(cert_pem.clone(), key_pem.clone())
+            .build()
+            .unwrap()
+            .serve_with_incoming(
+                TestStreamingServer::new(PipeBackedService),
+                tokio_stream::wrappers::TcpListenerStream::new(listener),
+            )
+            .await
+            .unwrap();
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let ca = tonic::transport::Certificate::from_pem(cert.cert.pem());
+    let tls_config = tonic::transport::ClientTlsConfig::new()
+        .ca_certificate(ca)
+        .domain_name("localhost");
+    let channel = tonic::transport::Channel::from_shared(format!("https://{addr}"))
+        .unwrap()
+        .tls_config(tls_config)
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let mut client = TestStreamingClient::new(channel);
+
+    let response = client
+        .server_stream(Request::new(StreamRequest { count: 3 }))
+        .await
+        .unwrap();
+    let items: Vec<StreamItem> = lazyflow_grpc::streaming::from_tonic(response.into_inner())
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(items.len(), 3);
+}

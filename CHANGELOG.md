@@ -4,6 +4,17 @@ All notable changes to the lazyflow workspace are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- **lazyflow-grpc**: `serve::Server` builder (ADR-004 Phase 1) --
+  `.tls()`, `.client_ca()`, `.client_auth_optional()` (behind a new `tls`
+  Cargo feature), and `.interceptor()`, eliminating the TLS/mTLS/auth
+  bootstrap boilerplate a tonic service otherwise repeats.
+  `.build()` hands back the real `tonic::transport::Server`, so
+  `.serve()`, `.serve_with_shutdown()`, `.add_service()`, and every other
+  tonic transport method keep working unchanged.
+
 ## [0.10.0] - 2026-06-12
 
 ### Added
