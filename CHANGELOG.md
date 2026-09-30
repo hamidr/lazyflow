@@ -4,6 +4,19 @@ All notable changes to the lazyflow workspace are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.0] - 2026-06-12
+
+### Added
+- **lazyflow**: `Pipe::try_fold_chunks`, a chunk-granular fold with
+  cooperative break. Drives the pipeline chunk by chunk, handing each whole
+  chunk to the fold closure so a consumer can amortize per-item work
+  (accounting, metering, budget checks) to once per chunk and stop
+  cooperatively at a chunk boundary without a separate cancel token. The
+  primitive behind a caller-defined budget-aware blocking operator (e.g. a
+  bounded top-N that charges an external memory accountant per row) that
+  `top_n`/`fold_collect` alone cannot express, since those buffer their
+  whole input before the caller sees anything.
+
 ## [0.9.0] - 2026-05-20
 
 ### Added
