@@ -1,6 +1,6 @@
 [package]
 name = "lazyflow-grpc"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2024"
 rust-version = "1.85"
 description = "gRPC connectors for lazyflow -- tonic Streaming<T> source and server response adapter"
@@ -10,7 +10,7 @@ keywords = ["async", "streaming", "grpc", "tonic", "protobuf"]
 categories = ["asynchronous", "network-programming"]
 
 [dependencies]
-lazyflow = { path = "..", version = "0.10.0" }
+lazyflow = { path = "..", version = "0.11.0" }
 tonic = { version = "0.14", default-features = false, features = ["transport", "channel"] }
 tower = { version = "0.5", default-features = false }
 futures-core = "0.3"

@@ -3,7 +3,7 @@ members = [".", "lazyflow-macros", "lazyflow-io", "lazyflow-http", "lazyflow-grp
 
 [package]
 name = "lazyflow"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2024"
 rust-version = "1.85"
 description = "A lazy, effectful streaming library for Rust -- FS2-inspired LazyFlow<B> with pull-based sources, async transforms, backpressure, and concurrency"
@@ -17,7 +17,7 @@ exclude = ["tests/", "examples/", ".github/", ".direnv/", ".envrc"]
 [dependencies]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "time", "net"] }
 futures-core = "0.3"
-lazyflow-macros = { path = "lazyflow-macros", version = "0.10.0" }
+lazyflow-macros = { path = "lazyflow-macros", version = "0.11.0" }
 
 [dev-dependencies]
 lazyflow-io = { path = "lazyflow-io" }
