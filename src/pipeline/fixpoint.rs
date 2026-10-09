@@ -8,7 +8,7 @@
 //! the step read the whole set found so far when it joins against it.
 
 use std::collections::HashSet;
-use std::hash::Hash;
+use std::hash::{BuildHasher, Hash};
 use std::sync::Arc;
 
 use super::Pipe;
@@ -60,7 +60,7 @@ impl<B: Clone + Eq + Hash + Send + Sync + 'static> Pipe<B> {
     /// });
     /// ```
     pub fn fixpoint(self, step: impl Fn(Round<B>) -> Pipe<B> + Send + Sync + 'static) -> Self {
-        self.fixpoint_rounds(None, Arc::new(step))
+        self.fixpoint_with_hasher::<std::collections::hash_map::RandomState>(None, step)
     }
 
     /// [`fixpoint`](Self::fixpoint) that stops after `max_rounds` rounds
@@ -71,10 +71,23 @@ impl<B: Clone + Eq + Hash + Send + Sync + 'static> Pipe<B> {
         max_rounds: usize,
         step: impl Fn(Round<B>) -> Pipe<B> + Send + Sync + 'static,
     ) -> Self {
-        self.fixpoint_rounds(Some(max_rounds), Arc::new(step))
+        self.fixpoint_with_hasher::<std::collections::hash_map::RandomState>(Some(max_rounds), step)
     }
 
-    fn fixpoint_rounds(self, max_rounds: Option<usize>, step: Step<B>) -> Self {
+    /// [`fixpoint`](Self::fixpoint) deduplicating through `S`, stopping
+    /// after `max_rounds` rounds when it is `Some`. Every item found is
+    /// hashed once, so on large or cheap-to-compare items the hasher can
+    /// dominate; a caller that does not need SipHash's resistance to
+    /// adversarial keys can pass a faster one.
+    pub fn fixpoint_with_hasher<S>(
+        self,
+        max_rounds: Option<usize>,
+        step: impl Fn(Round<B>) -> Pipe<B> + Send + Sync + 'static,
+    ) -> Self
+    where
+        S: BuildHasher + Default + Send + 'static,
+    {
+        let step: Step<B> = Arc::new(step);
         let seed = self.factory;
         Self::from_factory(move || {
             Box::new(PullFixpoint {
@@ -82,7 +95,7 @@ impl<B: Clone + Eq + Hash + Send + Sync + 'static> Pipe<B> {
                 step: Arc::clone(&step),
                 max_rounds,
                 rounds_run: 0,
-                seen: HashSet::new(),
+                seen: HashSet::<B, S>::default(),
                 segments: Vec::new(),
                 found: Vec::new(),
             })
@@ -90,20 +103,19 @@ impl<B: Clone + Eq + Hash + Send + Sync + 'static> Pipe<B> {
     }
 }
 
-struct PullFixpoint<B: Send + 'static> {
+struct PullFixpoint<B: Send + 'static, S> {
     /// The seed, then the running round's pipe; `None` once done.
     current: Option<Box<dyn PullOperator<B>>>,
     step: Step<B>,
     max_rounds: Option<usize>,
     rounds_run: usize,
-    // ponytail: std SipHash; a caller-chosen BuildHasher if hashing shows up in a profile.
-    seen: HashSet<B>,
+    seen: HashSet<B, S>,
     segments: Vec<Arc<[B]>>,
     /// Items the running round found first, the next round's delta.
     found: Vec<B>,
 }
 
-impl<B: Clone + Eq + Hash + Send + Sync + 'static> PullFixpoint<B> {
+impl<B: Clone + Eq + Hash + Send + Sync + 'static, S: BuildHasher> PullFixpoint<B, S> {
     /// Seal the finished round's items as the next delta and start the
     /// next round, or end when there is nothing new or no rounds left.
     fn next_round(&mut self) -> Option<Box<dyn PullOperator<B>>> {
@@ -120,7 +132,11 @@ impl<B: Clone + Eq + Hash + Send + Sync + 'static> PullFixpoint<B> {
     }
 }
 
-impl<B: Clone + Eq + Hash + Send + Sync + 'static> PullOperator<B> for PullFixpoint<B> {
+impl<B, S> PullOperator<B> for PullFixpoint<B, S>
+where
+    B: Clone + Eq + Hash + Send + Sync + 'static,
+    S: BuildHasher + Send,
+{
     fn next_chunk(&mut self) -> ChunkFut<'_, B> {
         Box::pin(async move {
             while let Some(current) = self.current.as_mut() {

@@ -26,6 +26,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   deduplicated and streamed out as found; iteration stops when a round finds
   nothing new, or after `n` rounds. A pull operator, so no task is spawned
   and a step's error or panic surfaces on the consumer's own poll.
+- **lazyflow**: `Pipe::fixpoint_with_hasher::<S>(max_rounds, step)` dedups
+  through a caller-chosen `BuildHasher` (`fixpoint` uses SipHash).
 
 ### Fixed
 - **lazyflow**: a panic inside a spawned producer task now fails the pipe

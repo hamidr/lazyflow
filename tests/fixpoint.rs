@@ -171,3 +171,43 @@ async fn the_pipe_is_a_blueprint_and_runs_again_from_scratch() {
     let b: BTreeSet<_> = pipe.collect().await.unwrap().into_iter().collect();
     assert_eq!(a, b);
 }
+
+static HASHERS_BUILT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Counts the hashers it builds, to show the fixpoint dedups through it.
+#[derive(Default)]
+struct CountingState(std::collections::hash_map::RandomState);
+
+impl std::hash::BuildHasher for CountingState {
+    type Hasher = std::collections::hash_map::DefaultHasher;
+    fn build_hasher(&self) -> Self::Hasher {
+        HASHERS_BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.0.build_hasher()
+    }
+}
+
+#[tokio::test]
+async fn a_caller_chosen_hasher_dedups_with_the_same_result() {
+    let before = HASHERS_BUILT.load(std::sync::atomic::Ordering::Relaxed);
+    let out = edges()
+        .fixpoint_with_hasher::<CountingState>(None, extend_by_an_edge)
+        .collect()
+        .await
+        .unwrap();
+    let set: BTreeSet<_> = out.iter().copied().collect();
+    assert_eq!(set.len(), out.len());
+    assert_eq!(set, closure_of_edges());
+    assert!(HASHERS_BUILT.load(std::sync::atomic::Ordering::Relaxed) > before);
+}
+
+#[tokio::test]
+async fn a_caller_chosen_hasher_honours_a_round_bound() {
+    let out = Pipe::once(0u64)
+        .fixpoint_with_hasher::<CountingState>(Some(2), |round: Round<u64>| {
+            Pipe::from_iter(round.delta().iter().map(|n| n + 1).collect::<Vec<_>>())
+        })
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(out, vec![0, 1, 2]);
+}
