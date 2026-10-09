@@ -14,6 +14,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   arms. A fan-out branch gets the same variant its source failed with.
 - **lazyflow-grpc**: `pipe_error_to_status` maps `Timeout` to
   `DEADLINE_EXCEEDED` and `Panicked` to `INTERNAL`.
+- **lazyflow**: `concurrently` fails the main pipe with the background
+  pipe's own error variant, with any foreign error kept as `source()`, rather
+  than a `Custom` holding only its message.
 
 ### Added
 - **lazyflow**: `Pipe::fixpoint(step)` and `Pipe::fixpoint_bounded(n, step)`,

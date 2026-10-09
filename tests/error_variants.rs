@@ -58,3 +58,49 @@ async fn a_pull_past_its_deadline_is_a_timeout_error() {
         .unwrap_err();
     assert!(matches!(err, PipeError::Timeout), "{err:?}");
 }
+
+fn endless() -> Pipe<i64> {
+    Pipe::iterate(0i64, |x| x + 1).eval_map(|x| async move {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        Ok(x)
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_background_failure_reaches_the_main_pipe_as_the_same_variant() {
+    let background: Pipe<i64> = Pipe::generate(|_tx| async move { Err(PipeError::Timeout) });
+    let err = endless()
+        .concurrently(background)
+        .collect()
+        .await
+        .unwrap_err();
+    assert!(matches!(err, PipeError::Timeout), "{err:?}");
+}
+
+#[derive(Debug)]
+struct Disk;
+impl std::fmt::Display for Disk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("disk full")
+    }
+}
+impl std::error::Error for Disk {}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_background_custom_error_stays_reachable_through_source() {
+    use std::error::Error;
+    let background: Pipe<i64> =
+        Pipe::generate(|_tx| async move { Err(PipeError::Custom(Box::new(Disk))) });
+    let err = endless()
+        .concurrently(background)
+        .collect()
+        .await
+        .unwrap_err();
+    let mut cause: Option<&(dyn Error + 'static)> = Some(&err);
+    let mut found = false;
+    while let Some(c) = cause {
+        found |= c.is::<Disk>();
+        cause = c.source();
+    }
+    assert!(found, "the original error is in the source chain: {err:?}");
+}

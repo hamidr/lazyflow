@@ -1012,7 +1012,7 @@ impl<B: Send + 'static> PullOperator<B> for PullRetry<B> {
 
 pub(super) struct PullConcurrently<B: Send + 'static> {
     pub(super) inner: Box<dyn PullOperator<B>>,
-    pub(super) bg_error: tokio::sync::watch::Receiver<Option<String>>,
+    pub(super) bg_error: tokio::sync::watch::Receiver<Option<crate::panic::SharedError>>,
     pub(super) abort: Option<tokio::task::AbortHandle>,
 }
 
@@ -1028,8 +1028,8 @@ impl<B: Send + 'static> PullOperator<B> for PullConcurrently<B> {
     fn next_chunk(&mut self) -> ChunkFut<'_, B> {
         Box::pin(async move {
             // Check for background error before each pull
-            if let Some(msg) = &*self.bg_error.borrow() {
-                return Err(PipeError::Custom(msg.clone().into()));
+            if let Some(e) = &*self.bg_error.borrow() {
+                return Err(e.clone().into_pipe_error());
             }
             self.inner.next_chunk().await
         })

@@ -155,7 +155,8 @@ impl<B: Send + 'static> Pipe<B> {
         let bg_factory = background.factory;
         Self::from_factory(move || {
             // Channel for background errors
-            let (err_tx, err_rx) = tokio::sync::watch::channel::<Option<String>>(None);
+            let (err_tx, err_rx) =
+                tokio::sync::watch::channel::<Option<crate::panic::SharedError>>(None);
 
             let mut bg_root = bg_factory();
             let bg_handle = tokio::spawn(async move {
@@ -165,7 +166,7 @@ impl<B: Send + 'static> Pipe<B> {
                     Ok(())
                 });
                 if let Err(e) = run.await.and_then(|r| r) {
-                    let _ = err_tx.send(Some(e.to_string()));
+                    let _ = err_tx.send(Some(crate::panic::SharedError::new(e)));
                 }
             });
 
