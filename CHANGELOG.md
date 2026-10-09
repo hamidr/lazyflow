@@ -4,7 +4,7 @@ All notable changes to the lazyflow workspace are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.12.0] - 2026-10-09
 
 ### Added
 - **lazyflow**: `Pipe::fixpoint(step)` and `Pipe::fixpoint_bounded(n, step)`,
