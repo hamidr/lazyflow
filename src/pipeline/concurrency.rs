@@ -160,15 +160,13 @@ impl<B: Send + 'static> Pipe<B> {
 
             let mut bg_root = bg_factory();
             let bg_handle = tokio::spawn(async move {
-                loop {
-                    match bg_root.next_chunk().await {
-                        Ok(Some(_)) => {} // discard output
-                        Ok(None) => return,
-                        Err(e) => {
-                            let _ = err_tx.send(Some(e.to_string()));
-                            return;
-                        }
-                    }
+                let run = crate::panic::catch_panic(async {
+                    // Output is discarded; only the end or the error matters.
+                    while bg_root.next_chunk().await?.is_some() {}
+                    Ok(())
+                });
+                if let Err(e) = run.await.and_then(|r| r) {
+                    let _ = err_tx.send(Some(e.to_string()));
                 }
             });
 
@@ -282,35 +280,42 @@ impl<B: Send + 'static> Pipe<Pipe<B>> {
             let mut outer = parent();
 
             let handle = tokio::spawn(async move {
-                let semaphore = Arc::new(tokio::sync::Semaphore::new(max_open));
+                let report_tx = out_tx.clone();
+                crate::panic::report_panic(&report_tx, async move {
+                    let semaphore = Arc::new(tokio::sync::Semaphore::new(max_open));
 
-                loop {
-                    let pipes = tokio::select! {
-                        result = outer.next_chunk() => result,
-                        _ = out_tx.closed() => break,
-                    };
-                    match pipes {
-                        Ok(Some(pipes)) => {
-                            for pipe in pipes {
-                                let permit = match semaphore.clone().acquire_owned().await {
-                                    Ok(p) => p,
-                                    Err(_) => return,
-                                };
-                                let tx = out_tx.clone();
-                                tokio::spawn(async move {
-                                    let mut pull = pipe.into_pull();
-                                    drain_to_channel(&mut *pull, &tx).await;
-                                    drop(permit);
-                                });
+                    loop {
+                        let pipes = tokio::select! {
+                            result = outer.next_chunk() => result,
+                            _ = out_tx.closed() => break,
+                        };
+                        match pipes {
+                            Ok(Some(pipes)) => {
+                                for pipe in pipes {
+                                    let permit = match semaphore.clone().acquire_owned().await {
+                                        Ok(p) => p,
+                                        Err(_) => return,
+                                    };
+                                    let tx = out_tx.clone();
+                                    tokio::spawn(async move {
+                                        crate::panic::report_panic(&tx, async {
+                                            let mut pull = pipe.into_pull();
+                                            drain_to_channel(&mut *pull, &tx).await;
+                                        })
+                                        .await;
+                                        drop(permit);
+                                    });
+                                }
+                            }
+                            Ok(None) => break,
+                            Err(e) => {
+                                let _ = out_tx.send(Err(e)).await;
+                                break;
                             }
                         }
-                        Ok(None) => break,
-                        Err(e) => {
-                            let _ = out_tx.send(Err(e)).await;
-                            break;
-                        }
                     }
-                }
+                })
+                .await;
             });
 
             Box::new(crate::channel::ChunkResultReceiver::new(
@@ -335,28 +340,35 @@ impl<B: Send + 'static> Pipe<Pipe<B>> {
             let mut outer = parent();
 
             let handle = tokio::spawn(async move {
-                loop {
-                    let pipes = tokio::select! {
-                        result = outer.next_chunk() => result,
-                        _ = out_tx.closed() => break,
-                    };
-                    match pipes {
-                        Ok(Some(pipes)) => {
-                            for pipe in pipes {
-                                let tx = out_tx.clone();
-                                tokio::spawn(async move {
-                                    let mut inner = pipe.into_pull();
-                                    drain_to_channel(&mut *inner, &tx).await;
-                                });
+                let report_tx = out_tx.clone();
+                crate::panic::report_panic(&report_tx, async move {
+                    loop {
+                        let pipes = tokio::select! {
+                            result = outer.next_chunk() => result,
+                            _ = out_tx.closed() => break,
+                        };
+                        match pipes {
+                            Ok(Some(pipes)) => {
+                                for pipe in pipes {
+                                    let tx = out_tx.clone();
+                                    tokio::spawn(async move {
+                                        crate::panic::report_panic(&tx, async {
+                                            let mut inner = pipe.into_pull();
+                                            drain_to_channel(&mut *inner, &tx).await;
+                                        })
+                                        .await;
+                                    });
+                                }
+                            }
+                            Ok(None) => break,
+                            Err(e) => {
+                                let _ = out_tx.send(Err(e)).await;
+                                break;
                             }
                         }
-                        Ok(None) => break,
-                        Err(e) => {
-                            let _ = out_tx.send(Err(e)).await;
-                            break;
-                        }
                     }
-                }
+                })
+                .await;
             });
 
             Box::new(crate::channel::ChunkResultReceiver::new(

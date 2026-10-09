@@ -22,7 +22,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   same way a normal end of stream does, so a consumer got a short, successful
   result. Covers `generate`, `generate_once`, `prefetch`, every `merge`
   source, `switch_map` and its inner pipes, `debounce`, `chunks_timeout`,
-  `par_eval_map`, `par_eval_map_unordered` and `into_stream`.
+  `par_eval_map`, `par_eval_map_unordered`, `par_join`,
+  `par_join_unbounded`, `concurrently` and `into_stream`.
+- **lazyflow**: `broadcast` and `partition` fail every branch when their
+  source errors or panics. Their channels carried no error, so a failing
+  source ended each branch early and successfully. Each branch now gets a
+  `PipeError::Custom` whose `source()` is the original error.
 - **lazyflow**: `chunks_timeout` passes an upstream error on instead of
   ending the stream at it.
 

@@ -21,7 +21,7 @@ async fn assert_panic_surfaces<B: Send + std::fmt::Debug + 'static>(pipe: Pipe<B
             e.to_string().contains("boom at two"),
             "error names the panic: {e}"
         ),
-        Ok(rows) => panic!("panic became a short stream: {rows:?}"),
+        Ok(rows) => panic!("panic became a short stream of {} items", rows.len()),
     }
 }
 
@@ -115,4 +115,81 @@ async fn a_panic_upstream_of_a_stream_fails_the_stream() {
         }
     }
     assert!(saw_error, "panic became a short stream");
+}
+
+fn fails_at_two() -> Pipe<i64> {
+    Pipe::from_iter(vec![1i64, 2, 3]).eval_map(|x| async move {
+        if x == 2 {
+            Err(PipeError::Custom("boom at two".into()))
+        } else {
+            Ok(x)
+        }
+    })
+}
+
+/// Every branch of a fan-out reads the same source, so every branch must
+/// fail when the source does, not just end early.
+async fn assert_every_branch_fails(branches: Vec<Pipe<i64>>) {
+    let handles: Vec<_> = branches
+        .into_iter()
+        .map(|b| tokio::spawn(b.collect()))
+        .collect();
+    for (i, h) in handles.into_iter().enumerate() {
+        match h.await.unwrap() {
+            Err(e) => assert!(e.to_string().contains("boom at two"), "branch {i}: {e}"),
+            Ok(rows) => panic!("branch {i} ended short instead of failing: {rows:?}"),
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_panic_upstream_of_broadcast_fails_every_branch() {
+    assert_every_branch_fails(panics_at_two().broadcast(2, 4)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_upstream_error_through_broadcast_fails_every_branch() {
+    assert_every_branch_fails(fails_at_two().broadcast(2, 4)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_panic_upstream_of_partition_fails_every_branch() {
+    assert_every_branch_fails(panics_at_two().partition(2, 4, |x| *x as u64)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_upstream_error_through_partition_fails_every_branch() {
+    assert_every_branch_fails(fails_at_two().partition(2, 4, |x| *x as u64)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_branch_error_keeps_the_upstream_error_as_its_source() {
+    use std::error::Error;
+    let mut branches = fails_at_two().broadcast(2, 4);
+    let other = tokio::spawn(branches.pop().unwrap().collect());
+    let err = branches.pop().unwrap().collect().await.unwrap_err();
+    let _ = other.await;
+    let source = err.source().expect("branch error has a source");
+    assert!(source.to_string().contains("boom at two"), "{source}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_panic_in_a_background_pipe_fails_the_main_pipe() {
+    let main = Pipe::iterate(0i64, |x| x + 1).eval_map(|x| async move {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        Ok(x)
+    });
+    assert_panic_surfaces(main.concurrently(panics_at_two()).take(10_000)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_panic_in_a_joined_inner_pipe_fails_the_pipe() {
+    let outer = Pipe::from_iter(vec![panics_at_two(), Pipe::once(9i64)]);
+    assert_panic_surfaces(outer.par_join(2)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_panic_in_an_unbounded_joined_inner_pipe_fails_the_pipe() {
+    let outer = Pipe::from_iter(vec![panics_at_two(), Pipe::once(9i64)]);
+    assert_panic_surfaces(outer.par_join_unbounded()).await;
 }
