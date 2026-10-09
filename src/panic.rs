@@ -43,8 +43,16 @@ impl SharedError {
         Self(std::sync::Arc::new(e))
     }
 
+    /// The variants that carry no foreign error are rebuilt, so every
+    /// branch can match on them; the rest are shared behind `Custom`.
     pub(crate) fn into_pipe_error(self) -> PipeError {
-        PipeError::Custom(Box::new(self))
+        match &*self.0 {
+            PipeError::Closed => PipeError::Closed,
+            PipeError::RetryExhausted => PipeError::RetryExhausted,
+            PipeError::Timeout => PipeError::Timeout,
+            PipeError::Panicked(msg) => PipeError::Panicked(msg.clone()),
+            PipeError::Io(_) | PipeError::Custom(_) => PipeError::Custom(Box::new(self)),
+        }
     }
 }
 
@@ -92,5 +100,5 @@ fn panic_error(payload: Box<dyn std::any::Any + Send>) -> PipeError {
         .map(|s| s.to_string())
         .or_else(|| payload.downcast_ref::<String>().cloned())
         .unwrap_or_else(|| "non-string panic payload".to_string());
-    PipeError::Custom(format!("producer task panicked: {msg}").into())
+    PipeError::Panicked(msg)
 }

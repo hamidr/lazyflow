@@ -330,3 +330,18 @@ async fn builder_server_tls_handshake_round_trips() {
         .unwrap();
     assert_eq!(items.len(), 3);
 }
+
+#[test]
+fn a_timeout_maps_to_deadline_exceeded() {
+    let status = lazyflow_grpc::serve::pipe_error_to_status(lazyflow::pull::PipeError::Timeout);
+    assert_eq!(status.code(), tonic::Code::DeadlineExceeded);
+}
+
+#[test]
+fn a_panic_maps_to_internal_naming_it() {
+    let status = lazyflow_grpc::serve::pipe_error_to_status(lazyflow::pull::PipeError::Panicked(
+        "boom".into(),
+    ));
+    assert_eq!(status.code(), tonic::Code::Internal);
+    assert!(status.message().contains("boom"), "{}", status.message());
+}

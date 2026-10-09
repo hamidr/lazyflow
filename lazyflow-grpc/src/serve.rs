@@ -79,6 +79,8 @@ pub fn to_stream_buffered<T: Send + 'static>(pipe: Pipe<T>, buffer_size: usize) 
 /// - `PipeError::Io` -> `Status::internal`
 /// - `PipeError::Closed` -> `Status::cancelled`
 /// - `PipeError::RetryExhausted` -> `Status::unavailable`
+/// - `PipeError::Timeout` -> `Status::deadline_exceeded`
+/// - `PipeError::Panicked` -> `Status::internal`
 /// - `PipeError::Custom` containing a `tonic::Status` -> unwrapped as-is
 /// - `PipeError::Custom` (other) -> `Status::internal`
 pub fn pipe_error_to_status(err: PipeError) -> tonic::Status {
@@ -86,6 +88,8 @@ pub fn pipe_error_to_status(err: PipeError) -> tonic::Status {
         PipeError::Io(e) => tonic::Status::internal(e.to_string()),
         PipeError::Closed => tonic::Status::cancelled("pipe closed"),
         PipeError::RetryExhausted => tonic::Status::unavailable("retry exhausted"),
+        PipeError::Timeout => tonic::Status::deadline_exceeded("timeout"),
+        e @ PipeError::Panicked(_) => tonic::Status::internal(e.to_string()),
         PipeError::Custom(e) => match e.downcast::<tonic::Status>() {
             Ok(status) => *status,
             Err(other) => tonic::Status::internal(other.to_string()),

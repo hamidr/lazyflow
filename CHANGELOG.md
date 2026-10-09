@@ -6,6 +6,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.12.0] - 2026-10-09
 
+### Changed
+- **lazyflow** (breaking): `PipeError` gains `Timeout` and `Panicked(String)`,
+  so a caller can match on a timeout or a panic instead of parsing a message.
+  `timeout()` now fails with `PipeError::Timeout` rather than
+  `Custom("timeout")`. An exhaustive `match` on `PipeError` needs the two new
+  arms. A fan-out branch gets the same variant its source failed with.
+- **lazyflow-grpc**: `pipe_error_to_status` maps `Timeout` to
+  `DEADLINE_EXCEEDED` and `Panicked` to `INTERNAL`.
+
 ### Added
 - **lazyflow**: `Pipe::fixpoint(step)` and `Pipe::fixpoint_bounded(n, step)`,
   semi-naive iteration to a fixpoint. Each round's step reads a `Round`: the
@@ -17,7 +26,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - **lazyflow**: a panic inside a spawned producer task now fails the pipe
-  with `PipeError::Custom("producer task panicked: ...")` instead of ending
+  with `PipeError::Panicked(message)` instead of ending
   it early. The dead task dropped its sender, which closed the channel the
   same way a normal end of stream does, so a consumer got a short, successful
   result. Covers `generate`, `generate_once`, `prefetch`, every `merge`

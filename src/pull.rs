@@ -27,6 +27,12 @@ pub enum PipeError {
     Closed,
     /// All retry attempts exhausted.
     RetryExhausted,
+    /// A pull took longer than its [`timeout`](crate::pipeline::Pipe::timeout).
+    Timeout,
+    /// A task running part of the pipe panicked; carries the panic message.
+    /// Without it the task's channel would close as at a normal end of
+    /// stream and the pipe would end short instead of failing.
+    Panicked(String),
     /// User-defined or third-party error.
     Custom(Box<dyn std::error::Error + Send + Sync>),
 }
@@ -37,6 +43,8 @@ impl std::fmt::Display for PipeError {
             PipeError::Io(e) => write!(f, "I/O error: {e}"),
             PipeError::Closed => write!(f, "channel closed"),
             PipeError::RetryExhausted => write!(f, "retry exhausted"),
+            PipeError::Timeout => write!(f, "timeout"),
+            PipeError::Panicked(msg) => write!(f, "task panicked: {msg}"),
             PipeError::Custom(e) => write!(f, "{e}"),
         }
     }

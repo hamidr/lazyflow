@@ -350,7 +350,7 @@ impl<B: Send + 'static> PullOperator<B> for PullTimeout<B> {
         Box::pin(async move {
             match tokio::time::timeout(self.duration, self.child.next_chunk()).await {
                 Ok(result) => result,
-                Err(_) => Err(PipeError::Custom("timeout".into())),
+                Err(_) => Err(PipeError::Timeout),
             }
         })
     }
