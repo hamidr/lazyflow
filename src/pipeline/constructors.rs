@@ -131,10 +131,13 @@ impl<B: Send + 'static> Pipe<B> {
             let (tx, rx) = tokio::sync::mpsc::channel::<Result<Vec<B>, PipeError>>(2);
             let f = Arc::clone(&f);
             let handle = tokio::spawn(async move {
-                let emitter = Emitter { tx: tx.clone() };
-                if let Err(e) = f(emitter).await {
-                    let _ = tx.send(Err(e)).await;
-                }
+                crate::panic::report_panic(&tx, async {
+                    let emitter = Emitter { tx: tx.clone() };
+                    if let Err(e) = f(emitter).await {
+                        let _ = tx.send(Err(e)).await;
+                    }
+                })
+                .await;
             });
             Box::new(crate::channel::ChunkResultReceiver::new(
                 rx,
@@ -182,10 +185,13 @@ impl<B: Send + 'static> Pipe<B> {
             };
             let (tx, rx) = tokio::sync::mpsc::channel::<Result<Vec<B>, PipeError>>(2);
             let handle = tokio::spawn(async move {
-                let emitter = Emitter { tx: tx.clone() };
-                if let Err(e) = f(emitter).await {
-                    let _ = tx.send(Err(e)).await;
-                }
+                crate::panic::report_panic(&tx, async {
+                    let emitter = Emitter { tx: tx.clone() };
+                    if let Err(e) = f(emitter).await {
+                        let _ = tx.send(Err(e)).await;
+                    }
+                })
+                .await;
             });
             Box::new(crate::channel::ChunkResultReceiver::new(
                 rx,

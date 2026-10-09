@@ -4,6 +4,19 @@ All notable changes to the lazyflow workspace are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+- **lazyflow**: a panic inside a spawned producer task now fails the pipe
+  with `PipeError::Custom("producer task panicked: ...")` instead of ending
+  it early. The dead task dropped its sender, which closed the channel the
+  same way a normal end of stream does, so a consumer got a short, successful
+  result. Covers `generate`, `generate_once`, `prefetch`, every `merge`
+  source, `switch_map` and its inner pipes, `debounce`, `chunks_timeout`,
+  `par_eval_map`, `par_eval_map_unordered` and `into_stream`.
+- **lazyflow**: `chunks_timeout` passes an upstream error on instead of
+  ending the stream at it.
+
 ## [0.11.0] - 2026-09-30
 
 ### Added

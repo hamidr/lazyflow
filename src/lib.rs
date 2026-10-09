@@ -40,6 +40,7 @@ pub mod channel;
 pub mod io;
 pub mod meter;
 pub mod operator;
+mod panic;
 pub mod pipeline;
 pub mod pull;
 pub mod signal;

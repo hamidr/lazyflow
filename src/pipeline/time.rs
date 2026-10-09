@@ -51,51 +51,55 @@ impl<B: Send + 'static> Pipe<B> {
             let mut root = parent();
 
             let handle = tokio::spawn(async move {
-                let mut latest: Option<B> = None;
+                let report_tx = tx.clone();
+                crate::panic::report_panic(&report_tx, async move {
+                    let mut latest: Option<B> = None;
 
-                loop {
-                    if latest.is_some() {
-                        tokio::select! {
-                            biased;
-                            result = root.next_chunk() => {
-                                match result {
-                                    Ok(Some(chunk)) => {
-                                        latest = chunk.into_iter().last();
-                                    }
-                                    Ok(None) => {
-                                        if let Some(item) = latest.take() {
-                                            let _ = tx.send(Ok(item)).await;
+                    loop {
+                        if latest.is_some() {
+                            tokio::select! {
+                                biased;
+                                result = root.next_chunk() => {
+                                    match result {
+                                        Ok(Some(chunk)) => {
+                                            latest = chunk.into_iter().last();
                                         }
-                                        return;
-                                    }
-                                    Err(e) => {
-                                        if let Some(item) = latest.take() {
-                                            let _ = tx.send(Ok(item)).await;
+                                        Ok(None) => {
+                                            if let Some(item) = latest.take() {
+                                                let _ = tx.send(Ok(item)).await;
+                                            }
+                                            return;
                                         }
-                                        let _ = tx.send(Err(e)).await;
-                                        return;
+                                        Err(e) => {
+                                            if let Some(item) = latest.take() {
+                                                let _ = tx.send(Ok(item)).await;
+                                            }
+                                            let _ = tx.send(Err(e)).await;
+                                            return;
+                                        }
+                                    }
+                                }
+                                _ = tokio::time::sleep(duration) => {
+                                    if let Some(item) = latest.take() {
+                                        if tx.send(Ok(item)).await.is_err() { return; }
                                     }
                                 }
                             }
-                            _ = tokio::time::sleep(duration) => {
-                                if let Some(item) = latest.take() {
-                                    if tx.send(Ok(item)).await.is_err() { return; }
+                        } else {
+                            match root.next_chunk().await {
+                                Ok(Some(chunk)) => {
+                                    latest = chunk.into_iter().last();
                                 }
-                            }
-                        }
-                    } else {
-                        match root.next_chunk().await {
-                            Ok(Some(chunk)) => {
-                                latest = chunk.into_iter().last();
-                            }
-                            Ok(None) => return,
-                            Err(e) => {
-                                let _ = tx.send(Err(e)).await;
-                                return;
+                                Ok(None) => return,
+                                Err(e) => {
+                                    let _ = tx.send(Err(e)).await;
+                                    return;
+                                }
                             }
                         }
                     }
-                }
+                })
+                .await;
             });
 
             Box::new(crate::channel::TaskResultReceiver::new(
@@ -113,56 +117,69 @@ impl<B: Send + 'static> Pipe<B> {
     pub fn chunks_timeout(self, max_size: usize, timeout: std::time::Duration) -> Pipe<Vec<B>> {
         let parent = self.factory;
         Pipe::from_factory(move || {
-            let (tx, rx) = tokio::sync::mpsc::channel::<Vec<B>>(2);
+            let (tx, rx) = tokio::sync::mpsc::channel::<Result<Vec<B>, crate::pull::PipeError>>(2);
             let mut root = parent();
             let handle = tokio::spawn(async move {
-                let mut batch = Vec::with_capacity(max_size);
-                loop {
-                    let deadline = tokio::time::sleep(timeout);
-                    tokio::pin!(deadline);
-
-                    // Pull chunks until batch is full or deadline fires
+                let report_tx = tx.clone();
+                crate::panic::report_panic(&report_tx, async move {
+                    let mut batch = Vec::with_capacity(max_size);
                     loop {
-                        // Flush any complete batches already buffered
-                        while batch.len() >= max_size {
-                            let ready = batch.drain(..max_size).collect();
-                            if tx.send(ready).await.is_err() {
-                                return;
-                            }
-                        }
+                        let deadline = tokio::time::sleep(timeout);
+                        tokio::pin!(deadline);
 
-                        tokio::select! {
-                            biased;
-                            result = root.next_chunk() => {
-                                match result {
-                                    Ok(Some(chunk)) => {
-                                        batch.extend(chunk);
-                                        // Loop back to flush any full batches
-                                    }
-                                    Ok(None) => {
-                                        // Source exhausted -- flush remainder
-                                        if !batch.is_empty() {
-                                            let _ = tx.send(std::mem::take(&mut batch)).await;
-                                        }
-                                        return;
-                                    }
-                                    Err(_) => return,
+                        // Pull chunks until batch is full or deadline fires
+                        loop {
+                            // Flush any complete batches already buffered
+                            while batch.len() >= max_size {
+                                let ready = batch.drain(..max_size).collect();
+                                if tx.send(Ok(ready)).await.is_err() {
+                                    return;
                                 }
                             }
-                            _ = &mut deadline => {
-                                // Timer fired -- flush partial batch
-                                if !batch.is_empty() {
-                                    if tx.send(std::mem::take(&mut batch)).await.is_err() { return; }
-                                    batch = Vec::with_capacity(max_size);
+
+                            tokio::select! {
+                                biased;
+                                result = root.next_chunk() => {
+                                    match result {
+                                        Ok(Some(chunk)) => {
+                                            batch.extend(chunk);
+                                            // Loop back to flush any full batches
+                                        }
+                                        Ok(None) => {
+                                            // Source exhausted -- flush remainder
+                                            if !batch.is_empty() {
+                                                let _ = tx.send(Ok(std::mem::take(&mut batch))).await;
+                                            }
+                                            return;
+                                        }
+                                        Err(e) => {
+                                            if !batch.is_empty() {
+                                                let _ = tx.send(Ok(std::mem::take(&mut batch))).await;
+                                            }
+                                            let _ = tx.send(Err(e)).await;
+                                            return;
+                                        }
+                                    }
                                 }
-                                break; // Reset timer
+                                _ = &mut deadline => {
+                                    // Timer fired -- flush partial batch
+                                    if !batch.is_empty() {
+                                        if tx.send(Ok(std::mem::take(&mut batch))).await.is_err() { return; }
+                                        batch = Vec::with_capacity(max_size);
+                                    }
+                                    break; // Reset timer
+                                }
                             }
                         }
                     }
-                }
+                })
+                .await;
             });
 
-            Box::new(crate::channel::TaskReceiver::new(rx, handle.abort_handle()))
+            Box::new(crate::channel::TaskResultReceiver::new(
+                rx,
+                handle.abort_handle(),
+            ))
         })
     }
 }

@@ -90,57 +90,60 @@ impl<B: Send + 'static> Pipe<B> {
             let f = Arc::clone(&f);
 
             let handle = tokio::spawn(async move {
-                let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
-                let mut pending: std::collections::VecDeque<
-                    tokio::task::JoinHandle<Result<C, PipeError>>,
-                > = std::collections::VecDeque::new();
-                let mut items: std::collections::VecDeque<B> = std::collections::VecDeque::new();
-                let mut source_done = false;
+                let report_tx = out_tx.clone();
+                crate::panic::report_panic(&report_tx, async move {
+                    let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
+                    let mut pending: std::collections::VecDeque<
+                        tokio::task::JoinHandle<Result<C, PipeError>>,
+                    > = std::collections::VecDeque::new();
+                    let mut items: std::collections::VecDeque<B> =
+                        std::collections::VecDeque::new();
+                    let mut source_done = false;
 
-                loop {
-                    if items.is_empty() && !source_done {
-                        match root.next_chunk().await {
-                            Ok(Some(chunk)) => items.extend(chunk),
-                            Ok(None) => source_done = true,
-                            Err(e) => {
-                                let _ = out_tx.send(Err(e)).await;
-                                return;
+                    loop {
+                        if items.is_empty() && !source_done {
+                            match root.next_chunk().await {
+                                Ok(Some(chunk)) => items.extend(chunk),
+                                Ok(None) => source_done = true,
+                                Err(e) => {
+                                    let _ = out_tx.send(Err(e)).await;
+                                    return;
+                                }
                             }
                         }
-                    }
 
-                    while let Some(item) = items.pop_front() {
-                        let permit = match semaphore.clone().acquire_owned().await {
-                            Ok(p) => p,
-                            Err(_) => return,
-                        };
-                        let f = Arc::clone(&f);
-                        pending.push_back(tokio::spawn(async move {
-                            let result = f(item).await;
-                            drop(permit);
-                            result
-                        }));
-                    }
-
-                    if pending.is_empty() {
-                        return;
-                    }
-
-                    let front = pending.pop_front().unwrap();
-                    match front.await {
-                        Ok(result) => {
-                            if out_tx.send(result).await.is_err() {
-                                return;
-                            }
+                        while let Some(item) = items.pop_front() {
+                            let permit = match semaphore.clone().acquire_owned().await {
+                                Ok(p) => p,
+                                Err(_) => return,
+                            };
+                            let f = Arc::clone(&f);
+                            pending.push_back(tokio::spawn(async move {
+                                let result = f(item).await;
+                                drop(permit);
+                                result
+                            }));
                         }
-                        Err(_) => {
-                            let _ = out_tx
-                                .send(Err(PipeError::Custom("worker dropped".into())))
-                                .await;
+
+                        if pending.is_empty() {
                             return;
                         }
+
+                        let front = pending.pop_front().unwrap();
+                        match front.await {
+                            Ok(result) => {
+                                if out_tx.send(result).await.is_err() {
+                                    return;
+                                }
+                            }
+                            Err(e) => {
+                                let _ = out_tx.send(Err(crate::panic::join_error(e))).await;
+                                return;
+                            }
+                        }
                     }
-                }
+                })
+                .await;
             });
 
             Box::new(crate::channel::TaskResultReceiver::new(
@@ -172,43 +175,50 @@ impl<B: Send + 'static> Pipe<B> {
             let f = Arc::clone(&f);
 
             let handle = tokio::spawn(async move {
-                let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
-                let mut workers = tokio::task::JoinSet::new();
+                let report_tx = out_tx.clone();
+                crate::panic::report_panic(&report_tx, async move {
+                    let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
+                    let mut workers = tokio::task::JoinSet::new();
 
-                loop {
-                    match root.next_chunk().await {
-                        Ok(Some(chunk)) => {
-                            for item in chunk {
-                                let f = Arc::clone(&f);
-                                let sem = Arc::clone(&semaphore);
-                                let tx = out_tx.clone();
-                                let permit = match sem.acquire_owned().await {
-                                    Ok(p) => p,
-                                    Err(_) => {
-                                        workers.abort_all();
-                                        return;
-                                    }
-                                };
-                                workers.spawn(async move {
-                                    let result = f(item).await;
-                                    let _ = tx.send(result).await;
-                                    drop(permit);
-                                });
+                    loop {
+                        match root.next_chunk().await {
+                            Ok(Some(chunk)) => {
+                                for item in chunk {
+                                    let f = Arc::clone(&f);
+                                    let sem = Arc::clone(&semaphore);
+                                    let tx = out_tx.clone();
+                                    let permit = match sem.acquire_owned().await {
+                                        Ok(p) => p,
+                                        Err(_) => {
+                                            workers.abort_all();
+                                            return;
+                                        }
+                                    };
+                                    workers.spawn(async move {
+                                        crate::panic::report_panic(&tx, async {
+                                            let result = f(item).await;
+                                            let _ = tx.send(result).await;
+                                        })
+                                        .await;
+                                        drop(permit);
+                                    });
+                                }
+                            }
+                            Ok(None) => {
+                                // Source exhausted -- wait for remaining workers
+                                drop(out_tx);
+                                while workers.join_next().await.is_some() {}
+                                return;
+                            }
+                            Err(e) => {
+                                let _ = out_tx.send(Err(e)).await;
+                                workers.abort_all();
+                                return;
                             }
                         }
-                        Ok(None) => {
-                            // Source exhausted -- wait for remaining workers
-                            drop(out_tx);
-                            while workers.join_next().await.is_some() {}
-                            return;
-                        }
-                        Err(e) => {
-                            let _ = out_tx.send(Err(e)).await;
-                            workers.abort_all();
-                            return;
-                        }
                     }
-                }
+                })
+                .await;
             });
 
             Box::new(crate::channel::TaskResultReceiver::new(

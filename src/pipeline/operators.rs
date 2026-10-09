@@ -141,39 +141,47 @@ impl<B: Send + 'static> Pipe<B> {
             let f = Arc::clone(&f);
 
             let handle = tokio::spawn(async move {
-                let mut current_handle: Option<tokio::task::AbortHandle> = None;
+                let report_tx = out_tx.clone();
+                crate::panic::report_panic(&report_tx, async move {
+                    let mut current_handle: Option<tokio::task::AbortHandle> = None;
 
-                loop {
-                    let chunk = tokio::select! {
-                        result = outer.next_chunk() => result,
-                        _ = out_tx.closed() => break,
-                    };
-                    match chunk {
-                        Ok(Some(items)) => {
-                            for item in items {
-                                if let Some(h) = current_handle.take() {
-                                    h.abort();
+                    loop {
+                        let chunk = tokio::select! {
+                            result = outer.next_chunk() => result,
+                            _ = out_tx.closed() => break,
+                        };
+                        match chunk {
+                            Ok(Some(items)) => {
+                                for item in items {
+                                    if let Some(h) = current_handle.take() {
+                                        h.abort();
+                                    }
+                                    let inner = f(item);
+                                    let tx = out_tx.clone();
+                                    let h = tokio::spawn(async move {
+                                        crate::panic::report_panic(&tx, async {
+                                            let mut pull = inner.into_pull();
+                                            super::concurrency::drain_to_channel(&mut *pull, &tx)
+                                                .await;
+                                        })
+                                        .await;
+                                    });
+                                    current_handle = Some(h.abort_handle());
                                 }
-                                let inner = f(item);
-                                let tx = out_tx.clone();
-                                let h = tokio::spawn(async move {
-                                    let mut pull = inner.into_pull();
-                                    super::concurrency::drain_to_channel(&mut *pull, &tx).await;
-                                });
-                                current_handle = Some(h.abort_handle());
+                            }
+                            Ok(None) => break,
+                            Err(e) => {
+                                let _ = out_tx.send(Err(e)).await;
+                                break;
                             }
                         }
-                        Ok(None) => break,
-                        Err(e) => {
-                            let _ = out_tx.send(Err(e)).await;
-                            break;
-                        }
                     }
-                }
-                // Let the last inner task finish naturally.
-                // It holds a tx clone, so the channel stays open
-                // until it completes.
-                drop(current_handle);
+                    // Let the last inner task finish naturally.
+                    // It holds a tx clone, so the channel stays open
+                    // until it completes.
+                    drop(current_handle);
+                })
+                .await;
             });
 
             Box::new(crate::channel::ChunkResultReceiver::new(

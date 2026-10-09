@@ -49,7 +49,7 @@ impl<B: Send + 'static> Pipe<B> {
             let (tx, rx) = tokio::sync::mpsc::channel::<Result<Vec<B>, PipeError>>(n.max(1));
             let mut root = parent();
             let handle = tokio::spawn(async move {
-                drain_to_channel(&mut *root, &tx).await;
+                crate::panic::report_panic(&tx, drain_to_channel(&mut *root, &tx)).await;
             });
             Box::new(crate::channel::ChunkResultReceiver::new(
                 rx,
@@ -80,7 +80,7 @@ impl<B: Send + 'static> Pipe<B> {
                 let tx = merged_tx.clone();
                 let mut root = factory();
                 let h = tokio::spawn(async move {
-                    drain_to_channel(&mut *root, &tx).await;
+                    crate::panic::report_panic(&tx, drain_to_channel(&mut *root, &tx)).await;
                 });
                 handles.push(h.abort_handle());
             }

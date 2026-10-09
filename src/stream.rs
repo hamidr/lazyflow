@@ -101,22 +101,26 @@ impl<B: Send + 'static> Pipe<B> {
         let (tx, rx) = tokio::sync::mpsc::channel(buffer_size.max(1));
         let mut root = self.into_pull();
         let handle = tokio::spawn(async move {
-            loop {
-                match root.next_chunk().await {
-                    Ok(Some(chunk)) => {
-                        for item in chunk {
-                            if tx.send(Ok(item)).await.is_err() {
-                                return;
+            let report_tx = tx.clone();
+            crate::panic::report_panic(&report_tx, async move {
+                loop {
+                    match root.next_chunk().await {
+                        Ok(Some(chunk)) => {
+                            for item in chunk {
+                                if tx.send(Ok(item)).await.is_err() {
+                                    return;
+                                }
                             }
                         }
-                    }
-                    Ok(None) => return,
-                    Err(e) => {
-                        let _ = tx.send(Err(e)).await;
-                        return;
+                        Ok(None) => return,
+                        Err(e) => {
+                            let _ = tx.send(Err(e)).await;
+                            return;
+                        }
                     }
                 }
-            }
+            })
+            .await;
         });
         PipeStream {
             rx,
