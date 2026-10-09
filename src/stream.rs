@@ -1,4 +1,4 @@
-//! Interop between [`Pipe`](crate::pipeline::Pipe) and
+//! Interop between [`Pipe`] and
 //! [`futures::Stream`](futures_core::Stream).
 
 use std::future::poll_fn;
@@ -37,7 +37,7 @@ impl<B: Send + 'static> PullOperator<B> for PullFromStream<B> {
 }
 
 impl<B: Send + 'static> Pipe<B> {
-    /// Create a pipe from any [`Stream`](futures_core::Stream).
+    /// Create a pipe from any [`Stream`].
     ///
     /// The resulting pipe is single-use -- cloning and materializing
     /// both clones returns an error. Uses a 256-element internal
@@ -47,7 +47,7 @@ impl<B: Send + 'static> Pipe<B> {
         Self::from_stream_buffered(stream, DEFAULT_CHUNK_SIZE)
     }
 
-    /// Create a pipe from a [`Stream`](futures_core::Stream) with a
+    /// Create a pipe from a [`Stream`] with a
     /// custom chunk size for internal buffering.
     pub fn from_stream_buffered(
         stream: impl Stream<Item = B> + Send + 'static,
@@ -84,7 +84,7 @@ impl<B: Send + 'static> Stream for PipeStream<B> {
 }
 
 impl<B: Send + 'static> Pipe<B> {
-    /// Convert this pipe into a [`Stream`](futures_core::Stream).
+    /// Convert this pipe into a [`Stream`].
     ///
     /// Spawns a background task that pulls chunks and sends elements
     /// one by one through a bounded channel (capacity 256). The task
@@ -95,7 +95,7 @@ impl<B: Send + 'static> Pipe<B> {
         self.into_stream_buffered(256)
     }
 
-    /// Convert this pipe into a [`Stream`](futures_core::Stream)
+    /// Convert this pipe into a [`Stream`]
     /// with a custom channel capacity for backpressure tuning.
     pub fn into_stream_buffered(self, buffer_size: usize) -> PipeStream<B> {
         let (tx, rx) = tokio::sync::mpsc::channel(buffer_size.max(1));

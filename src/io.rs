@@ -1,4 +1,4 @@
-//! Generic I/O adapters for [`Pipe`](crate::pipeline::Pipe).
+//! Generic I/O adapters for [`Pipe`].
 //!
 //! Sources read from any [`AsyncRead`] into a `Pipe<Vec<u8>>`.
 //! Sinks drain any `Pipe<B>` where `B: AsRef<[u8]>` into an [`AsyncWrite`].

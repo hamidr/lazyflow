@@ -89,7 +89,7 @@ macro_rules! pipe_gen {
 
 /// Like [`pipe_gen!`] but for single-use sources that capture owned resources.
 ///
-/// Uses [`Pipe::generate_once`] under the hood -- the resulting pipe can be
+/// Uses [`Pipe::generate_once`](crate::pipeline::Pipe::generate_once) under the hood -- the resulting pipe can be
 /// cloned, but only one clone may be materialized.
 ///
 /// ```ignore

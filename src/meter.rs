@@ -1,6 +1,6 @@
 //! Lightweight observability for pipe stages.
 //!
-//! [`Pipe::meter`] inserts a monitoring point that reports element
+//! [`Pipe::meter_with`](crate::pipeline::Pipe::meter_with) inserts a monitoring point that reports element
 //! counts and errors to a callback, without adding external dependencies.
 //!
 //! ```ignore
