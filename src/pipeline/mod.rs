@@ -9,12 +9,15 @@ mod async_ops;
 mod concurrency;
 mod constructors;
 mod error;
+mod fixpoint;
 mod operators;
 pub(crate) mod pull_ops;
 mod terminals;
 mod time;
 
 use std::sync::Arc;
+
+pub use fixpoint::Round;
 
 use crate::pull::{PipeError, PullOperator};
 

@@ -6,6 +6,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **lazyflow**: `Pipe::fixpoint(step)` and `Pipe::fixpoint_bounded(n, step)`,
+  semi-naive iteration to a fixpoint. Each round's step reads a `Round`: the
+  items first found in the round before (`delta()`) and every item found so
+  far (`full()`, shared per-round segments, never copied). Items are
+  deduplicated and streamed out as found; iteration stops when a round finds
+  nothing new, or after `n` rounds. A pull operator, so no task is spawned
+  and a step's error or panic surfaces on the consumer's own poll.
+
 ### Fixed
 - **lazyflow**: a panic inside a spawned producer task now fails the pipe
   with `PipeError::Custom("producer task panicked: ...")` instead of ending

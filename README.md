@@ -256,6 +256,7 @@ async fn double(x: i64) -> i64 { x * 2 }
 | `enumerate()` | `(index, element)` pairs |
 | `changes()` | Emit only when value changes (O(1) memory) |
 | `distinct()` / `distinct_by(key)` | Deduplicate via `HashSet` (unbounded memory) |
+| `fixpoint(step)` / `fixpoint_bounded(n, step)` | Semi-naive recursion: each round reads the last round's new items (`Round::delta`) and everything so far (`Round::full`); stops when a round finds nothing new |
 | `group_adjacent_by(key)` | Group consecutive same-key runs |
 | `intersperse(sep)` | Insert separator between elements |
 | `chunks(n)` / `sliding_window(n)` | Fixed / overlapping batches |

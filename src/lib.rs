@@ -117,7 +117,7 @@ pub mod prelude {
     pub use crate::cancel::CancelToken;
     pub use crate::channel::{Receiver, Sender, bounded};
     pub use crate::operator::{Operator, PinFut};
-    pub use crate::pipeline::{Emitter, Pipe};
+    pub use crate::pipeline::{Emitter, Pipe, Round};
     pub use crate::pull::{ChunkFut, PipeError, PullOperator};
     pub use crate::sink::Sink;
     pub use crate::transform::Transform;
