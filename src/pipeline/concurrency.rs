@@ -9,7 +9,7 @@ use super::Pipe;
 type BroadcastTransform<B> = Box<dyn FnOnce(Pipe<B>) -> Pipe<B> + Send>;
 
 use super::pull_ops::{
-    BroadcastReceiver, GuardedPull, LazyFanOut, LazyPartition, PartitionReceiver, SharedAbort,
+    BroadcastReceiver, GuardedPull, LazyFanOut, LazyPartition, PartitionReceiver,
 };
 
 /// Drain a PullOperator into a chunk-level channel, cancelling on consumer drop.
@@ -129,9 +129,8 @@ impl<B: Send + 'static> Pipe<B> {
             .map(|idx| {
                 let shared = Arc::clone(&shared);
                 Pipe::from_factory(move || {
-                    let rx = shared.take_broadcast_receiver(idx);
-                    let abort = SharedAbort::new(shared.abort_handle());
-                    Box::new(BroadcastReceiver { rx, _abort: abort })
+                    let (rx, _abort) = shared.take_broadcast_receiver(idx);
+                    Box::new(BroadcastReceiver { rx, _abort })
                 })
             })
             .collect()

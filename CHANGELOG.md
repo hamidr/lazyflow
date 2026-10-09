@@ -28,6 +28,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   source errors or panics. Their channels carried no error, so a failing
   source ended each branch early and successfully. Each branch now gets a
   `PipeError::Custom` whose `source()` is the original error.
+- **lazyflow**: a `broadcast` or `partition` branch that stops reading no
+  longer stops the others. Dropping one broadcast branch aborted the shared
+  source, and either fan-out stopped feeding every branch at the first
+  closed one; the rest ended early and successfully.
 - **lazyflow**: `chunks_timeout` passes an upstream error on instead of
   ending the stream at it.
 
