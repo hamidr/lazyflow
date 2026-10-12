@@ -589,8 +589,6 @@ impl<B: Send + 'static> Pipe<B> {
 impl<B: Send + 'static> Pipe<Option<B>> {
     pub fn un_none_terminate(self) -> Pipe<B> {
         let parent = self.factory;
-        Pipe::from_factory(move || {
-            Box::new(super::pull_ops::PullUnNoneTerminate { child: parent() })
-        })
+        Pipe::from_factory(move || Box::new(super::pull_ops::PullUnNoneTerminate::new(parent())))
     }
 }

@@ -1092,36 +1092,44 @@ impl<B: Send + 'static> PullOperator<Option<B>> for PullNoneTerminate<B> {
     }
 }
 
+/// Unwraps elements until the first `None`, after which the pipe is over
+/// and the source is never pulled again.
 pub(super) struct PullUnNoneTerminate<B: Send + 'static> {
-    pub(super) child: Box<dyn PullOperator<Option<B>>>,
+    child: Box<dyn PullOperator<Option<B>>>,
+    terminated: bool,
+}
+
+impl<B: Send + 'static> PullUnNoneTerminate<B> {
+    pub(super) fn new(child: Box<dyn PullOperator<Option<B>>>) -> Self {
+        Self {
+            child,
+            terminated: false,
+        }
+    }
 }
 
 impl<B: Send + 'static> PullOperator<B> for PullUnNoneTerminate<B> {
     fn next_chunk(&mut self) -> ChunkFut<'_, B> {
         Box::pin(async move {
-            match self.child.next_chunk().await? {
-                Some(chunk) => {
-                    let mut result = Vec::with_capacity(chunk.len());
-                    for item in chunk {
-                        match item {
-                            Some(val) => result.push(val),
-                            None => {
-                                return if result.is_empty() {
-                                    Ok(None)
-                                } else {
-                                    Ok(Some(result))
-                                };
-                            }
+            while !self.terminated {
+                let Some(chunk) = self.child.next_chunk().await? else {
+                    return Ok(None);
+                };
+                let mut items = Vec::with_capacity(chunk.len());
+                for item in chunk {
+                    match item {
+                        Some(item) => items.push(item),
+                        None => {
+                            self.terminated = true;
+                            break;
                         }
                     }
-                    if result.is_empty() {
-                        Ok(None)
-                    } else {
-                        Ok(Some(result))
-                    }
                 }
-                None => Ok(None),
+                if !items.is_empty() {
+                    return Ok(Some(items));
+                }
             }
+            Ok(None)
         })
     }
 }
