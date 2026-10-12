@@ -409,7 +409,22 @@ pub(super) struct LazyBranches<T> {
 }
 
 impl<T: Send + 'static> LazyBranches<T> {
-    pub(super) fn new(n: usize, buffer_size: usize, start: StartFanOut<T>) -> Self {
+    /// One claim per branch, to be held by that branch's pipe.
+    pub(super) fn split(
+        n: usize,
+        buffer_size: usize,
+        start: StartFanOut<T>,
+    ) -> Vec<BranchClaim<T>> {
+        let branches = Arc::new(Self::new(n, buffer_size, start));
+        (0..n)
+            .map(|idx| BranchClaim {
+                branches: Arc::clone(&branches),
+                idx,
+            })
+            .collect()
+    }
+
+    fn new(n: usize, buffer_size: usize, start: StartFanOut<T>) -> Self {
         let (senders, receivers) = (0..n)
             .map(|_| {
                 let (tx, rx) = tokio::sync::mpsc::channel(buffer_size.max(1));
@@ -425,7 +440,7 @@ impl<T: Send + 'static> LazyBranches<T> {
 
     /// Starts the source if it has not started, then hands over branch
     /// `idx`'s receiver.
-    pub(super) fn claim(&self, idx: usize) -> Branch<T> {
+    fn claim(&self, idx: usize) -> Branch<T> {
         let source = self.source.get_or_init(|| {
             let (start, senders) = self.unstarted.lock().unwrap().take().unwrap();
             // One guard shared by every branch: the source is cancelled
@@ -436,6 +451,34 @@ impl<T: Send + 'static> LazyBranches<T> {
             .take()
             .expect("fan-out branch already consumed");
         (rx, Arc::clone(source))
+    }
+
+    /// Closes branch `idx` if it was never claimed, so the source stops
+    /// sending to a branch no one can read.
+    fn release(&self, idx: usize) {
+        if let Ok(mut receivers) = self.receivers.lock() {
+            receivers[idx].take();
+        }
+    }
+}
+
+/// A fan-out branch, owned by that branch's pipe. Dropping the pipe
+/// without materializing it lets go of the branch: an idle branch still
+/// exerts backpressure, a dropped one must not.
+pub(super) struct BranchClaim<T: Send + 'static> {
+    branches: Arc<LazyBranches<T>>,
+    idx: usize,
+}
+
+impl<T: Send + 'static> BranchClaim<T> {
+    pub(super) fn claim(&self) -> Branch<T> {
+        self.branches.claim(self.idx)
+    }
+}
+
+impl<T: Send + 'static> Drop for BranchClaim<T> {
+    fn drop(&mut self) {
+        self.branches.release(self.idx);
     }
 }
 

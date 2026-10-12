@@ -107,7 +107,9 @@ impl<B: Send + 'static> Pipe<B> {
     /// Fan-out: clone each element to `n` branches.
     ///
     /// Each branch has a bounded buffer. The source blocks if ANY branch
-    /// is full. Background task cancelled when ALL branches are dropped.
+    /// is full. A branch dropped without being consumed is skipped rather
+    /// than waited for. Background task cancelled when ALL branches are
+    /// dropped.
     ///
     /// Materialization is lazy -- the source is not started until the
     /// first branch is consumed.
@@ -122,17 +124,11 @@ impl<B: Send + 'static> Pipe<B> {
             return vec![self];
         }
 
-        let branches = Arc::new(LazyBranches::new(
-            n,
-            buffer_size,
-            start_broadcast(self.factory),
-        ));
-
-        (0..n)
-            .map(|idx| {
-                let branches = Arc::clone(&branches);
+        LazyBranches::split(n, buffer_size, start_broadcast(self.factory))
+            .into_iter()
+            .map(|branch| {
                 Pipe::from_factory(move || {
-                    let (rx, _abort) = branches.claim(idx);
+                    let (rx, _abort) = branch.claim();
                     Box::new(BroadcastReceiver { rx, _abort })
                 })
             })
@@ -218,7 +214,9 @@ impl<B: Send + 'static> Pipe<B> {
     /// Each element goes to exactly one branch: `key(&element) % n`.
     /// No cloning -- elements are moved. Each branch has a bounded buffer
     /// of `buffer_size` chunks. Backpressure: source blocks if any branch
-    /// is full. Background task cancelled when all branches are dropped.
+    /// is full. A branch dropped without being consumed is skipped and its
+    /// elements discarded. Background task cancelled when all branches are
+    /// dropped.
     ///
     /// Materialization is lazy -- the source is not started until the
     /// first branch is consumed.
@@ -242,17 +240,11 @@ impl<B: Send + 'static> Pipe<B> {
             return vec![self];
         }
 
-        let branches = Arc::new(LazyBranches::new(
-            n,
-            buffer_size,
-            start_partition(self.factory, key),
-        ));
-
-        (0..n)
-            .map(|idx| {
-                let branches = Arc::clone(&branches);
+        LazyBranches::split(n, buffer_size, start_partition(self.factory, key))
+            .into_iter()
+            .map(|branch| {
                 Pipe::from_factory(move || {
-                    let (rx, _abort) = branches.claim(idx);
+                    let (rx, _abort) = branch.claim();
                     Box::new(PartitionReceiver { inner: rx, _abort })
                 })
             })
