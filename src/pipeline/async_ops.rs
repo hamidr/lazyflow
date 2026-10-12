@@ -1,5 +1,6 @@
 //! Async element operations (eval_map, eval_filter, eval_tap, par_eval_map).
 
+use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -72,8 +73,10 @@ impl<B: Send + 'static> Pipe<B> {
     /// Bounded-parallel async transform with ordered output.
     ///
     /// Processes up to `concurrency` elements concurrently. Results are
-    /// emitted in the same order as the input. Uses a background task
-    /// pool connected by channels.
+    /// emitted in the same order as the input. At most `concurrency`
+    /// results are in flight, running or finished but not yet emitted, so
+    /// a slow item holds back later work instead of piling up results.
+    /// Uses a background task pool connected by channels.
     pub fn par_eval_map<
         C: Send + 'static,
         Fut: Future<Output = Result<C, PipeError>> + Send + 'static,
@@ -87,62 +90,15 @@ impl<B: Send + 'static> Pipe<B> {
         let concurrency = concurrency.max(1);
         Pipe::from_factory(move || {
             let (out_tx, out_rx) = tokio::sync::mpsc::channel::<Result<C, PipeError>>(concurrency);
-            let mut root = parent();
+            let root = parent();
             let f = Arc::clone(&f);
 
             let handle = tokio::spawn(async move {
                 let report_tx = out_tx.clone();
-                crate::panic::report_panic(&report_tx, async move {
-                    let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
-                    let mut pending: std::collections::VecDeque<OwnedTask<Result<C, PipeError>>> =
-                        std::collections::VecDeque::new();
-                    let mut items: std::collections::VecDeque<B> =
-                        std::collections::VecDeque::new();
-                    let mut source_done = false;
-
-                    loop {
-                        if items.is_empty() && !source_done {
-                            match root.next_chunk().await {
-                                Ok(Some(chunk)) => items.extend(chunk),
-                                Ok(None) => source_done = true,
-                                Err(e) => {
-                                    let _ = out_tx.send(Err(e)).await;
-                                    return;
-                                }
-                            }
-                        }
-
-                        while let Some(item) = items.pop_front() {
-                            let permit = match semaphore.clone().acquire_owned().await {
-                                Ok(p) => p,
-                                Err(_) => return,
-                            };
-                            let f = Arc::clone(&f);
-                            pending.push_back(OwnedTask::spawn(async move {
-                                let result = f(item).await;
-                                drop(permit);
-                                result
-                            }));
-                        }
-
-                        if pending.is_empty() {
-                            return;
-                        }
-
-                        let front = pending.pop_front().unwrap();
-                        match front.await {
-                            Ok(result) => {
-                                if out_tx.send(result).await.is_err() {
-                                    return;
-                                }
-                            }
-                            Err(e) => {
-                                let _ = out_tx.send(Err(crate::panic::join_error(e))).await;
-                                return;
-                            }
-                        }
-                    }
-                })
+                crate::panic::report_panic(
+                    &report_tx,
+                    ordered_window(root, f, concurrency, out_tx),
+                )
                 .await;
             });
 
@@ -227,4 +183,89 @@ impl<B: Send + 'static> Pipe<B> {
             ))
         })
     }
+}
+
+/// Runs `f` over `root` with at most `concurrency` results in flight and
+/// sends them to `out_tx` in input order.
+///
+/// A finished result is emitted while the next upstream pull is still
+/// pending, and that pull is resumed afterwards rather than restarted:
+/// it may already own consumed data. An upstream failure is reported
+/// after the results of the items that preceded it.
+async fn ordered_window<B, C, F, Fut>(
+    mut root: Box<dyn PullOperator<B>>,
+    f: Arc<F>,
+    concurrency: usize,
+    out_tx: tokio::sync::mpsc::Sender<Result<C, PipeError>>,
+) where
+    B: Send + 'static,
+    C: Send + 'static,
+    F: Fn(B) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<C, PipeError>> + Send + 'static,
+{
+    let mut window: VecDeque<OwnedTask<Result<C, PipeError>>> = VecDeque::new();
+    let mut items: VecDeque<B> = VecDeque::new();
+    let mut upstream_open = true;
+    let mut upstream_error = None;
+
+    loop {
+        while window.len() < concurrency {
+            let Some(item) = items.pop_front() else { break };
+            let f = Arc::clone(&f);
+            window.push_back(OwnedTask::spawn(async move { f(item).await }));
+        }
+
+        if upstream_open && items.is_empty() && window.len() < concurrency {
+            let mut pull = root.next_chunk();
+            let pulled = loop {
+                let Some(front) = window.front_mut() else {
+                    break (&mut pull).await;
+                };
+                tokio::select! {
+                    biased;
+                    done = front => {
+                        window.pop_front();
+                        if !emit(&out_tx, done).await {
+                            return;
+                        }
+                    }
+                    pulled = &mut pull => break pulled,
+                }
+            };
+            match pulled {
+                Ok(Some(chunk)) => items.extend(chunk),
+                Ok(None) => upstream_open = false,
+                Err(e) => {
+                    upstream_open = false;
+                    upstream_error = Some(e);
+                }
+            }
+            continue;
+        }
+
+        match window.pop_front() {
+            Some(task) => {
+                if !emit(&out_tx, task.await).await {
+                    return;
+                }
+            }
+            None => {
+                if let Some(e) = upstream_error {
+                    let _ = out_tx.send(Err(e)).await;
+                }
+                return;
+            }
+        }
+    }
+}
+
+/// Sends one worker's outcome downstream. Returns whether to keep going:
+/// a failed worker or a departed consumer ends the map.
+async fn emit<C>(
+    out_tx: &tokio::sync::mpsc::Sender<Result<C, PipeError>>,
+    done: Result<Result<C, PipeError>, tokio::task::JoinError>,
+) -> bool {
+    let result = done.unwrap_or_else(|e| Err(crate::panic::join_error(e)));
+    let keep_going = result.is_ok();
+    out_tx.send(result).await.is_ok() && keep_going
 }
