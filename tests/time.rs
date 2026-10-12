@@ -188,3 +188,54 @@ async fn chunks_timeout_of_size_zero_ends_with_a_finite_source() {
         .unwrap();
     assert_eq!(batches, [vec![1]]);
 }
+
+const QUIET: Duration = Duration::from_millis(20);
+
+#[tokio::test(start_paused = true)]
+async fn debounce_keeps_an_element_still_in_flight_when_the_quiet_period_ends() {
+    let source = Pipe::once(1).chain(Pipe::once(2).delay_by(SLOW_PULL));
+    let out = source.debounce(QUIET).collect().await.unwrap();
+    assert_eq!(out, [1, 2]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn debounce_keeps_a_delayed_error_after_emitting() {
+    let source = Pipe::once(1).chain(Pipe::once(2).eval_map(|_| async {
+        tokio::time::sleep(SLOW_PULL).await;
+        Err(PipeError::Timeout)
+    }));
+    let mut results = source
+        .debounce(QUIET)
+        .attempt()
+        .collect()
+        .await
+        .unwrap()
+        .into_iter();
+    assert_eq!(results.next().unwrap().unwrap(), 1);
+    assert!(matches!(results.next(), Some(Err(PipeError::Timeout))));
+}
+
+#[tokio::test(start_paused = true)]
+async fn debounce_emits_only_the_latest_of_a_quick_burst() {
+    let out = Pipe::from_iter([1, 2, 3])
+        .chain(Pipe::once(4).delay_by(SLOW_PULL))
+        .debounce(QUIET)
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(out, [3, 4]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn debounce_waits_for_quiet_measured_from_the_latest_element() {
+    let start = tokio::time::Instant::now();
+    let times = Pipe::once(1)
+        .chain(Pipe::once(2).delay_by(Duration::from_millis(10)))
+        .chain(Pipe::once(3).delay_by(SLOW_PULL))
+        .debounce(QUIET)
+        .map(move |_| start.elapsed())
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(times[0], Duration::from_millis(10) + QUIET);
+}

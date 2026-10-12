@@ -37,8 +37,9 @@ impl<B: Send + 'static> Pipe<B> {
     /// Emit an element only after `duration` of silence.
     ///
     /// If new elements keep arriving within `duration`, only the
-    /// latest is emitted once the quiet period elapses. Spawns a
-    /// background task at materialization.
+    /// latest is emitted once the quiet period elapses; at the end of the
+    /// source it is emitted at once. Emitting does not cancel an in-flight
+    /// upstream pull. Spawns a background task at materialization.
     pub fn debounce(self, duration: std::time::Duration) -> Self {
         let parent = self.factory;
         Self::from_factory(move || {
@@ -51,45 +52,45 @@ impl<B: Send + 'static> Pipe<B> {
                     let mut latest: Option<B> = None;
 
                     loop {
-                        if latest.is_some() {
+                        // A pull may own consumed data while pending. The
+                        // quiet timer must emit around that same future
+                        // rather than cancel it.
+                        let mut next_chunk = root.next_chunk();
+                        let result = loop {
+                            if latest.is_none() {
+                                break (&mut next_chunk).await;
+                            }
                             tokio::select! {
                                 biased;
-                                result = root.next_chunk() => {
-                                    match result {
-                                        Ok(Some(chunk)) => {
-                                            latest = chunk.into_iter().last();
-                                        }
-                                        Ok(None) => {
-                                            if let Some(item) = latest.take() {
-                                                let _ = tx.send(Ok(item)).await;
-                                            }
-                                            return;
-                                        }
-                                        Err(e) => {
-                                            if let Some(item) = latest.take() {
-                                                let _ = tx.send(Ok(item)).await;
-                                            }
-                                            let _ = tx.send(Err(e)).await;
-                                            return;
-                                        }
-                                    }
-                                }
+                                result = &mut next_chunk => break result,
                                 _ = tokio::time::sleep(duration) => {
                                     if let Some(item) = latest.take() {
-                                        if tx.send(Ok(item)).await.is_err() { return; }
+                                        if tx.send(Ok(item)).await.is_err() {
+                                            return;
+                                        }
                                     }
                                 }
                             }
-                        } else {
-                            match root.next_chunk().await {
-                                Ok(Some(chunk)) => {
-                                    latest = chunk.into_iter().last();
+                        };
+
+                        match result {
+                            Ok(Some(chunk)) => {
+                                if let Some(item) = chunk.into_iter().last() {
+                                    latest = Some(item);
                                 }
-                                Ok(None) => return,
-                                Err(e) => {
-                                    let _ = tx.send(Err(e)).await;
-                                    return;
+                            }
+                            Ok(None) => {
+                                if let Some(item) = latest.take() {
+                                    let _ = tx.send(Ok(item)).await;
                                 }
+                                return;
+                            }
+                            Err(e) => {
+                                if let Some(item) = latest.take() {
+                                    let _ = tx.send(Ok(item)).await;
+                                }
+                                let _ = tx.send(Err(e)).await;
+                                return;
                             }
                         }
                     }
