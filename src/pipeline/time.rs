@@ -106,11 +106,14 @@ impl<B: Send + 'static> Pipe<B> {
 
     /// Batch elements by count OR time, whichever triggers first.
     ///
-    /// Collects up to `max_size` elements into a `Vec<B>`. If the
+    /// Collects up to `max_size` elements (at least one) into a `Vec<B>`. If the
     /// deadline elapses before the batch is full, flushes whatever
     /// has accumulated. Timer flushes do not cancel an in-flight upstream
     /// pull. Spawns a background task at materialization.
     pub fn chunks_timeout(self, max_size: usize, timeout: std::time::Duration) -> Pipe<Vec<B>> {
+        // An empty batch would make no progress; size zero means one, as
+        // in chunks().
+        let max_size = max_size.max(1);
         let parent = self.factory;
         Pipe::from_factory(move || {
             let (tx, rx) = tokio::sync::mpsc::channel::<Result<Vec<B>, crate::pull::PipeError>>(2);

@@ -167,3 +167,24 @@ async fn throttle_waits_only_for_the_elements_taken() {
     assert_eq!(taken, [0, 1]);
     assert_eq!(start.elapsed(), RATE);
 }
+
+#[tokio::test(start_paused = true)]
+async fn chunks_timeout_of_size_zero_batches_single_elements() {
+    let batches = Pipe::from_iter([1, 2])
+        .chunks_timeout(0, BATCH_TIMEOUT)
+        .take(3)
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(batches, [vec![1], vec![2]]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn chunks_timeout_of_size_zero_ends_with_a_finite_source() {
+    let batches = Pipe::once(1)
+        .chunks_timeout(0, BATCH_TIMEOUT)
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(batches, [vec![1]]);
+}
