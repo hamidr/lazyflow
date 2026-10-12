@@ -356,22 +356,13 @@ impl<B: Send + 'static> Pipe<B> {
     /// Alternate elements from two pipes in round-robin order.
     ///
     /// Deterministic, unlike [`merge`](Self::merge) which interleaves
-    /// by arrival time. When one pipe exhausts, remaining elements
-    /// from the other are drained.
+    /// by arrival time: the order does not depend on how either source
+    /// is chunked, and a slow source is waited for, not skipped. When one
+    /// pipe exhausts, remaining elements from the other are drained.
     pub fn interleave(self, other: Pipe<B>) -> Self {
         let left = self.factory;
         let right = other.factory;
-        Self::from_factory(move || {
-            Box::new(PullInterleave {
-                left: left(),
-                right: right(),
-                left_turn: true,
-                left_buf: std::collections::VecDeque::new(),
-                right_buf: std::collections::VecDeque::new(),
-                left_done: false,
-                right_done: false,
-            })
-        })
+        Self::from_factory(move || Box::new(PullInterleave::new(left(), right())))
     }
 
     /// Insert a separator between every two elements.

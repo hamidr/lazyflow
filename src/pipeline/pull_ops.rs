@@ -95,66 +95,76 @@ impl<B: Send + 'static, R: Send + Sync + 'static> PullOperator<B> for PullBracke
     }
 }
 
+/// One source of an interleave: its unread elements and whether it ended.
+struct Side<B> {
+    pull: Box<dyn PullOperator<B>>,
+    buf: VecDeque<B>,
+    done: bool,
+}
+
+impl<B: Send + 'static> Side<B> {
+    fn new(pull: Box<dyn PullOperator<B>>) -> Self {
+        Self {
+            pull,
+            buf: VecDeque::new(),
+            done: false,
+        }
+    }
+
+    fn needs_refill(&self) -> bool {
+        self.buf.is_empty() && !self.done
+    }
+
+    fn exhausted(&self) -> bool {
+        self.buf.is_empty() && self.done
+    }
+
+    async fn refill(&mut self) -> Result<(), PipeError> {
+        match self.pull.next_chunk().await? {
+            Some(chunk) => self.buf.extend(chunk),
+            None => self.done = true,
+        }
+        Ok(())
+    }
+}
+
+/// Alternates element by element between two sources. A side whose turn
+/// it is gets refilled rather than skipped; only an ended side gives up
+/// its turn.
 pub(super) struct PullInterleave<B: Send + 'static> {
-    pub(super) left: Box<dyn PullOperator<B>>,
-    pub(super) right: Box<dyn PullOperator<B>>,
-    pub(super) left_turn: bool,
-    pub(super) left_buf: VecDeque<B>,
-    pub(super) right_buf: VecDeque<B>,
-    pub(super) left_done: bool,
-    pub(super) right_done: bool,
+    sides: [Side<B>; 2],
+    turn: usize,
+}
+
+impl<B: Send + 'static> PullInterleave<B> {
+    pub(super) fn new(left: Box<dyn PullOperator<B>>, right: Box<dyn PullOperator<B>>) -> Self {
+        Self {
+            sides: [Side::new(left), Side::new(right)],
+            turn: 0,
+        }
+    }
 }
 
 impl<B: Send + 'static> PullOperator<B> for PullInterleave<B> {
     fn next_chunk(&mut self) -> ChunkFut<'_, B> {
         Box::pin(async move {
-            let mut result = Vec::new();
-
+            let mut out = Vec::new();
             loop {
-                // Refill buffers as needed
-                if self.left_buf.is_empty() && !self.left_done {
-                    match self.left.next_chunk().await? {
-                        Some(chunk) => self.left_buf.extend(chunk),
-                        None => self.left_done = true,
+                let (turn, other) = (self.turn, 1 - self.turn);
+                if self.sides[turn].needs_refill() {
+                    // A refill may wait or fail; hand over what is ready first.
+                    if !out.is_empty() {
+                        return Ok(Some(out));
                     }
+                    self.sides[turn].refill().await?;
+                } else if let Some(item) = self.sides[turn].buf.pop_front() {
+                    out.push(item);
+                    self.turn = other;
+                } else if self.sides[other].exhausted() {
+                    return Ok(Some(out).filter(|out| !out.is_empty()));
+                } else {
+                    self.turn = other;
                 }
-                if self.right_buf.is_empty() && !self.right_done {
-                    match self.right.next_chunk().await? {
-                        Some(chunk) => self.right_buf.extend(chunk),
-                        None => self.right_done = true,
-                    }
-                }
-
-                if self.left_buf.is_empty() && self.right_buf.is_empty() {
-                    break;
-                }
-
-                // Interleave one element at a time
-                let limit = self.left_buf.len().max(self.right_buf.len()) * 2;
-                for _ in 0..limit {
-                    if self.left_turn {
-                        if let Some(item) = self.left_buf.pop_front() {
-                            result.push(item);
-                        }
-                    } else if let Some(item) = self.right_buf.pop_front() {
-                        result.push(item);
-                    }
-                    self.left_turn = !self.left_turn;
-
-                    if self.left_buf.is_empty() && self.right_buf.is_empty() {
-                        break;
-                    }
-                }
-
-                if !result.is_empty() {
-                    return Ok(Some(result));
-                }
-            }
-
-            if result.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(result))
             }
         })
     }
