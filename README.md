@@ -114,7 +114,10 @@ sse::connect("https://example.com/events")
     .await?;
 ```
 
-Auto-reconnects with exponential backoff and Last-Event-ID resume.
+Parses incrementally across HTTP body chunks. Auto-reconnects with
+exponential backoff and `Last-Event-ID` resume, kept across id-only frames
+and reconnects. `SseConfig::max_event_size` (default 16 MiB) bounds one
+event; exceeding it ends the pipe with an error and no reconnect.
 
 ### WebSocket
 
@@ -135,6 +138,8 @@ incoming
 ```
 
 Lazy connection, cloneable sender, automatic ping/pong, 16 MiB message limit.
+The socket lives as long as the incoming pipe: once that pipe ends or is
+dropped, the socket closes and `WsSender` sends fail with `PipeError::Closed`.
 
 ### gRPC streaming
 
@@ -259,12 +264,15 @@ async fn double(x: i64) -> i64 { x * 2 }
 | `fixpoint(step)` / `fixpoint_bounded(n, step)` / `fixpoint_with_hasher::<S>(max, step)` | Semi-naive recursion: each round reads the last round's new items (`Round::delta`) and everything so far (`Round::full`); stops when a round finds nothing new |
 | `group_adjacent_by(key)` | Group consecutive same-key runs |
 | `intersperse(sep)` | Insert separator between elements |
-| `chunks(n)` / `sliding_window(n)` | Fixed / overlapping batches |
-| `chain(other)` / `interleave(other)` | Sequential / round-robin composition |
+| `chunks(n)` / `sliding_window(n)` | Fixed / overlapping batches; only the last `chunks` batch may be short |
+| `chain(other)` / `interleave(other)` | Sequential / element-by-element alternation |
 | `zip(other)` / `zip_with(other, f)` | Positional pairing |
 | `flatten()` / `unchunks()` | Unnest `Pipe<Pipe<B>>` / `Pipe<Vec<B>>` |
 | `attempt()` | Errors become `Result` elements |
-| `none_terminate()` | `Option`-based termination |
+| `none_terminate()` / `un_none_terminate()` | Wrap in `Some` and end with `None` / stop at the first `None` |
+| `lines()` / `lines_with_max_len(n)` | Split a `Pipe<Vec<u8>>` into lines; content over 1 MiB (or `n`) fails |
+| `top_n(k, key)` | Keep the `k` highest-ranked elements in O(k) memory, descending |
+| `fold_collect(f)` / `try_fold_collect(f)` | Drain, transform the whole buffer, re-emit |
 | `on_finalize(f)` | Cleanup on completion/error/drop |
 | `with_cancel(token)` | Stop on `CancelToken` signal |
 | `meter_with(name, cb)` | Observability hook |
@@ -274,7 +282,7 @@ async fn double(x: i64) -> i64 { x * 2 }
 | Method | Description |
 |--------|-------------|
 | `eval_map(f)` / `eval_filter(f)` / `eval_tap(f)` | Async per-element transform / filter / side-effect |
-| `par_eval_map(n, f)` | Bounded parallel, ordered output |
+| `par_eval_map(n, f)` | Bounded parallel, ordered output; at most `n` results running or awaiting emission |
 | `par_eval_map_unordered(n, f)` | Bounded parallel, unordered output |
 | `pipe(operator)` | Custom `Operator<A, B>` |
 
@@ -282,11 +290,11 @@ async fn double(x: i64) -> i64 { x * 2 }
 
 | Method | Description |
 |--------|-------------|
-| `timeout(d)` | Error if pull exceeds deadline |
-| `throttle(d)` | Rate-limit output (delays, not drops) |
+| `timeout(d)` | `PipeError::Timeout` if a pull exceeds the deadline |
+| `throttle(d)` | Rate-limit output as the consumer receives it (delays, not drops) |
 | `delay_by(d)` | Delay each element |
 | `debounce(d)` | Emit after quiet period |
-| `chunks_timeout(n, d)` | Batch by count or time |
+| `chunks_timeout(n, d)` | Batch by count or time; size 0 acts as 1 |
 
 ### Concurrency
 
@@ -310,6 +318,11 @@ async fn double(x: i64) -> i64 { x * 2 }
 | `bracket(acquire, use_fn, release)` | Guaranteed cleanup via `Arc<R>` |
 | `retry(factory, max)` | Retry from scratch on error |
 
+`PipeError` variants: `Io`, `Closed`, `RetryExhausted`, `Timeout`,
+`Panicked(msg)` (a spawned task panicked, so the pipe fails instead of ending
+short), and `Custom`. Fan-out branches and `concurrently` keep the source's
+variant.
+
 ### Terminals
 
 | Method | Description |
@@ -320,6 +333,7 @@ async fn double(x: i64) -> i64 { x * 2 }
 | `count().await?` | Count elements |
 | `for_each(f).await?` / `eval_for_each(f).await?` | Sync / async side-effect |
 | `first().await?` / `last().await?` | First / last element |
+| `try_fold_chunks(init, f).await?` | Fold whole chunks; `ControlFlow::Break` stops early |
 | `into_writer(w).await?` | Drain to `AsyncWrite` |
 | `into_stream()` / `into_stream_buffered(n)` | Convert to `futures::Stream` |
 | `drain_to(&sink).await?` | Consume via `Sink` |
@@ -354,6 +368,19 @@ async fn double(x: i64) -> i64 { x * 2 }
 | `lazyflow-io` | File, TCP, UDP constructors |
 | `lazyflow-http` | SSE source, WebSocket source/sink |
 | `lazyflow-grpc` | gRPC streaming source, server response adapter |
+
+## Development
+
+The Nix flake pins the toolchain (Rust 1.99.0) and `protoc`. Run the CI
+checks locally (fmt, clippy with warnings denied, all-features tests, rustdoc
+with warnings denied):
+
+```bash
+scripts/gate.sh
+```
+
+`models/` holds Quint models that supplement the regression tests; see
+`models/README.md`.
 
 ## License
 

@@ -20,13 +20,13 @@ with regression coverage retained in the repository.
 
 ### Current implementation status
 
-All 16 findings and H1 are fixed on `fix/audit-streaming`, one commit per
+All 16 findings and H1 are fixed and merged to `main`, one commit per
 finding (F4 has a preceding behavior-preserving refactor), each with its
 regression tests. The audit proof suites from the proof worktree pass against
 the branch: 14 of 14 core proofs, 5 of 5 connector proofs, and the F16
 compiler example builds and runs. The workspace gate (`scripts/gate.sh`:
 fmt, clippy with warnings denied, all-features tests, rustdoc with warnings
-denied) passes with 406 tests, 36 ignored.
+denied) passes with 413 tests, 36 ignored, on Rust 1.99.0.
 
 Contract choices made while fixing: F9 treats the stream chunk size as a
 maximum; F13 raises size 0 to 1; F14 counts line content without `\n` or
