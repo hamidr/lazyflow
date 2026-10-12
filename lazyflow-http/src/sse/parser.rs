@@ -2,8 +2,9 @@
 //!
 //! HTTP body chunks need not align with characters or lines, so the parser
 //! accepts arbitrary byte fragments and keeps the unfinished UTF-8
-//! sequence, line, and event between them. It knows nothing about
-//! connections or retries; the caller owns those.
+//! sequence, line, and event between them. It also keeps the stream's
+//! resume point, the last event ID, across reconnections. It knows
+//! nothing about connections or retry policy; the caller owns those.
 
 use std::time::Duration;
 
@@ -15,9 +16,13 @@ use super::SseEvent;
 /// sends a line break.
 const MAX_LINE: usize = 16 * 1024 * 1024;
 
-/// Parser state for one connection's event stream.
+/// Parser state for an event stream and its reconnections.
 #[derive(Default)]
 pub(super) struct EventStreamParser {
+    /// Set by `id` fields; committed to `last_event_id` at each blank line.
+    id_buffer: String,
+    /// The resume point sent as `Last-Event-ID`; empty means none.
+    last_event_id: String,
     /// Trailing bytes of a UTF-8 sequence the last fragment cut short.
     utf8_tail: Vec<u8>,
     /// Whether text has been decoded yet; a leading BOM is skipped.
@@ -41,6 +46,27 @@ struct PendingEvent {
 }
 
 impl EventStreamParser {
+    /// A parser whose stream resumes from `last_event_id`.
+    pub(super) fn resuming_from(last_event_id: Option<String>) -> Self {
+        let last_event_id = last_event_id.unwrap_or_default();
+        Self {
+            id_buffer: last_event_id.clone(),
+            last_event_id,
+            ..Self::default()
+        }
+    }
+
+    /// Starts over for a new connection. Partial input is discarded,
+    /// including an unfinished event's `id`; the resume point is kept.
+    pub(super) fn restart(&mut self) {
+        *self = Self::resuming_from(self.last_event_id());
+    }
+
+    /// The ID to resume from on reconnection, if the server set one.
+    pub(super) fn last_event_id(&self) -> Option<String> {
+        Some(self.last_event_id.clone()).filter(|id| !id.is_empty())
+    }
+
     /// Feeds one body fragment and returns the events it completes.
     pub(super) fn feed(&mut self, bytes: &[u8]) -> Result<Vec<SseEvent>, PipeError> {
         let text = self.decode(bytes);
@@ -133,14 +159,19 @@ impl EventStreamParser {
                 self.event.data.push_str(value);
                 self.event.data.push('\n');
             }
-            "id" if !value.contains('\0') => self.event.id = Some(value.to_owned()),
+            "id" if !value.contains('\0') => {
+                self.event.id = Some(value.to_owned());
+                self.id_buffer = value.to_owned();
+            }
             _ => {}
         }
         None
     }
 
-    /// Ends the event at a blank line. An event without data is dropped.
+    /// Ends the event at a blank line. The resume point advances even
+    /// when the event has no data and so is not dispatched.
     fn dispatch(&mut self) -> Option<SseEvent> {
+        self.last_event_id.clone_from(&self.id_buffer);
         let mut event = std::mem::take(&mut self.event);
         if event.data.is_empty() {
             return None;
@@ -291,6 +322,59 @@ mod tests {
             "\u{FEFF}: hi\r\nevent: e\u{e9}\rdata: \u{1F600} one\ndata:two\r\n\r\nid: 7\ndata\n\n"
                 .as_bytes(),
         );
+    }
+
+    fn resume_point_after(wire: &str) -> Option<String> {
+        let mut parser = EventStreamParser::default();
+        parser.feed(wire.as_bytes()).unwrap();
+        parser.last_event_id()
+    }
+
+    #[test]
+    fn an_id_without_data_still_sets_the_resume_point() {
+        assert_eq!(resume_point_after("id: 7\n\n").as_deref(), Some("7"));
+    }
+
+    #[test]
+    fn the_resume_point_survives_events_without_an_id() {
+        let wire = "id: 3\ndata: a\n\ndata: b\n\n";
+        assert_eq!(resume_point_after(wire).as_deref(), Some("3"));
+    }
+
+    #[test]
+    fn an_empty_id_clears_the_resume_point() {
+        assert_eq!(resume_point_after("id: 3\n\nid\n\n"), None);
+    }
+
+    #[test]
+    fn an_id_containing_null_leaves_the_resume_point() {
+        assert_eq!(
+            resume_point_after("id: 3\n\nid: x\0y\n\n").as_deref(),
+            Some("3")
+        );
+    }
+
+    #[test]
+    fn an_id_in_an_unfinished_event_is_not_committed() {
+        assert_eq!(
+            resume_point_after("id: 3\n\nid: 4\ndata: x\n"),
+            Some("3".into())
+        );
+        let mut parser = EventStreamParser::default();
+        parser.feed(b"id: 3\n\nid: 4\n").unwrap();
+        parser.restart();
+        parser.feed(b"data: y\n\n").unwrap();
+        assert_eq!(parser.last_event_id().as_deref(), Some("3"));
+    }
+
+    #[test]
+    fn a_restart_keeps_the_resume_point_and_drops_partial_input() {
+        let mut parser = EventStreamParser::resuming_from(Some("1".into()));
+        parser.feed(b"data: cut").unwrap();
+        parser.restart();
+        let events = parser.feed(b"data: whole\n\n").unwrap();
+        assert_eq!(events[0].data, "whole");
+        assert_eq!(parser.last_event_id().as_deref(), Some("1"));
     }
 
     #[test]

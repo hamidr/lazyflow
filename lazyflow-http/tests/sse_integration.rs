@@ -229,3 +229,73 @@ async fn sse_treats_a_crlf_split_across_body_chunks_as_one_line_end() {
     let event = first_event(url).await.unwrap().unwrap();
     assert_eq!(event.data, "a\nb");
 }
+
+/// Serves `first_body` on the first connection and records the second
+/// request's headers, answering it with one event.
+async fn reconnect_capturing_request(
+    first_body: &'static str,
+) -> (String, tokio::task::JoinHandle<String>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let respond = |body: &str| {
+        format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\
+             content-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    };
+    let server = tokio::spawn(async move {
+        let mut buf = vec![0u8; 4096];
+        let (mut first, _) = listener.accept().await.unwrap();
+        let _ = first.read(&mut buf).await.unwrap();
+        first
+            .write_all(respond(first_body).as_bytes())
+            .await
+            .unwrap();
+        drop(first);
+        let (mut second, _) = listener.accept().await.unwrap();
+        let n = second.read(&mut buf).await.unwrap();
+        let request = String::from_utf8_lossy(&buf[..n]).to_lowercase();
+        second
+            .write_all(respond("data: resumed\n\n").as_bytes())
+            .await
+            .unwrap();
+        request
+    });
+    (format!("http://{addr}/events"), server)
+}
+
+async fn request_after_reconnect(first_body: &'static str) -> String {
+    let (url, server) = reconnect_capturing_request(first_body).await;
+    let resumed = sse::connect_with(SseConfig {
+        url,
+        initial_reconnect_delay: Duration::from_millis(5),
+        ..Default::default()
+    })
+    .filter(|e| e.data == "resumed")
+    .first();
+    tokio::time::timeout(Duration::from_secs(2), resumed)
+        .await
+        .expect("no reconnect")
+        .unwrap();
+    server.await.unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sse_resumes_from_an_id_sent_without_data() {
+    let request = request_after_reconnect("id: checkpoint-7\n\n").await;
+    assert!(request.contains("last-event-id: checkpoint-7"), "{request}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sse_resumes_from_the_last_id_when_later_events_carry_none() {
+    let request = request_after_reconnect("id: 3\ndata: a\n\ndata: b\n\n").await;
+    assert!(request.contains("last-event-id: 3"), "{request}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sse_an_empty_id_clears_the_resume_point() {
+    let request = request_after_reconnect("id: 3\ndata: a\n\nid\ndata: b\n\n").await;
+    assert!(!request.contains("last-event-id"), "{request}");
+}

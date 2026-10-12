@@ -84,7 +84,7 @@ pub fn connect(url: impl Into<String>) -> Pipe<SseEvent> {
 pub fn connect_with(config: SseConfig) -> Pipe<SseEvent> {
     Pipe::generate_once(move |tx| async move {
         let client = reqwest::Client::new();
-        let mut last_event_id = config.last_event_id.clone();
+        let mut parser = EventStreamParser::resuming_from(config.last_event_id.clone());
         let mut reconnect_delay = config.initial_reconnect_delay;
         let mut first_connect = true;
 
@@ -103,8 +103,8 @@ pub fn connect_with(config: SseConfig) -> Pipe<SseEvent> {
                 .header("Accept", "text/event-stream")
                 .header("Cache-Control", "no-cache");
 
-            if let Some(ref id) = last_event_id {
-                req = req.header("Last-Event-ID", id.as_str());
+            if let Some(id) = parser.last_event_id() {
+                req = req.header("Last-Event-ID", id);
             }
 
             for (key, value) in &config.headers {
@@ -141,14 +141,9 @@ pub fn connect_with(config: SseConfig) -> Pipe<SseEvent> {
             // Reset backoff on successful connection
             reconnect_delay = config.initial_reconnect_delay;
 
-            let result = read_event_stream(
-                &tx,
-                response,
-                &mut last_event_id,
-                &mut reconnect_delay,
-                &config,
-            )
-            .await;
+            parser.restart();
+            let result =
+                read_event_stream(&tx, response, &mut parser, &mut reconnect_delay, &config).await;
             match result {
                 Ok(()) => return Ok(()),
                 Err(_) if config.reconnect => continue,
@@ -162,7 +157,7 @@ pub fn connect_with(config: SseConfig) -> Pipe<SseEvent> {
 async fn read_event_stream(
     tx: &lazyflow::pipeline::Emitter<SseEvent>,
     response: reqwest::Response,
-    last_event_id: &mut Option<String>,
+    parser: &mut EventStreamParser,
     reconnect_delay: &mut Duration,
     config: &SseConfig,
 ) -> Result<(), PipeError> {
@@ -170,7 +165,6 @@ async fn read_event_stream(
     use std::pin::Pin;
 
     let mut byte_stream = response.bytes_stream();
-    let mut parser = EventStreamParser::default();
 
     loop {
         let chunk = {
@@ -188,9 +182,6 @@ async fn read_event_stream(
             *reconnect_delay = retry.min(config.max_reconnect_delay);
         }
         for event in events {
-            if let Some(ref id) = event.id {
-                *last_event_id = Some(id.clone());
-            }
             tx.emit(event).await?;
         }
     }
