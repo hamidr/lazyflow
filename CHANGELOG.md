@@ -29,6 +29,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **lazyflow**: `chunks_timeout` no longer drops data held by an upstream pull
   that is still running when the timer fires, and treats size 0 as 1 instead
   of emitting empty batches forever.
+- **lazyflow**: `debounce` no longer drops an element or error held by an
+  upstream pull that is still running when the quiet period ends.
 - **lazyflow**: `par_eval_map` workers are cancelled when the pipe stops or an
   earlier worker fails, and finished results are emitted while upstream is
   pending.

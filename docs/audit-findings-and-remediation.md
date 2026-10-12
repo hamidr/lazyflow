@@ -35,6 +35,13 @@ reconnect after a size violation. F2 now reports an upstream failure after
 the results of earlier items, and F6 ties `WsSender` to the incoming pipe's
 lifetime. `CHANGELOG.md` records the externally visible changes.
 
+Follow-ups beyond the reported findings: `debounce` had the F1 fault (its
+quiet timer dropped the pending upstream pull) and is fixed the same way.
+`par_join`, `par_join_unbounded` and `switch_map` hold their inner tasks by
+bare handles but were verified to stop when the consumer goes away, since
+each inner task drains into a channel and quits once it closes;
+`tests/inner_pipe_lifetime.rs` pins that.
+
 Source line references below refer to the audited commit; the fixes shift
 them.
 
@@ -107,7 +114,7 @@ part of F16.
    lifecycle mechanisms. Extract small shared helpers where ownership semantics
    genuinely repeat; avoid speculative frameworks or new public APIs.
 7. **Test observable contracts.** Check values, ordering, timing at the consumer,
-   remote connection shutdown, and side effects—not merely total runtime or
+   remote connection shutdown, and side effects, not merely total runtime or
    element counts.
 8. **Separate fixes from contract changes.** Clarify F9's buffering semantics,
    F13's zero-size policy, F14's length definition, and H1's configurable limits
@@ -115,7 +122,7 @@ part of F16.
 
 ## Findings and applicable solutions
 
-### F1 — Timer batching cancels unfinished upstream work
+### F1: Timer batching cancels unfinished upstream work
 
 **Priority:** high. **Status:** fixed.
 
@@ -147,7 +154,7 @@ items and one pending item. The negative control reproduces lost data. This is
 bounded randomized simulation, not proof of the implementation or liveness.
 Commands and model limitations are recorded in `models/README.md`.
 
-### F2 — Ordered parallel-map scheduling stalls output and overproduces
+### F2: Ordered parallel-map scheduling stalls output and overproduces
 
 **Priority:** high.
 
@@ -184,7 +191,7 @@ one already-pulled source chunk and the bounded output channel.
 **Proofs:** `ordered_parallel_map_emits_buffered_results_before_next_source_chunk`,
 `ordered_parallel_map_bounds_work_ahead_of_consumer`.
 
-### F3 — Ordered parallel-map workers outlive the pipeline
+### F3: Ordered parallel-map workers outlive the pipeline
 
 **Priority:** high.
 
@@ -213,7 +220,7 @@ error/panic exits and removal of a job from the pending queue.
 
 **Proof:** `ordered_parallel_map_cancels_workers_on_drop`.
 
-### F4 — Dropped unmaterialized fan-out branches stall surviving branches
+### F4: Dropped unmaterialized fan-out branches stall surviving branches
 
 **Priority:** high.
 
@@ -244,7 +251,7 @@ both broadcast and partition; ensure the source stops when all branches drop.
 **Proofs:** `dropped_unmaterialized_broadcast_branch_does_not_stall`,
 `dropped_unmaterialized_partition_branch_does_not_stall`.
 
-### F5 — Background failure cannot interrupt a blocked main pull
+### F5: Background failure cannot interrupt a blocked main pull
 
 **Priority:** high.
 
@@ -268,7 +275,7 @@ drop; preservation of typed errors.
 
 **Proof:** `background_error_interrupts_pending_main`.
 
-### F6 — WebSocket writer survives incoming-stream shutdown
+### F6: WebSocket writer survives incoming-stream shutdown
 
 **Priority:** high.
 
@@ -296,13 +303,13 @@ channel enqueue success alone is not proof of successful network delivery.
 
 **Proof:** `websocket_writer_stops_when_incoming_is_dropped`.
 
-### F7 — SSE parsing depends on transport chunk boundaries
+### F7: SSE parsing depends on transport chunk boundaries
 
 **Priority:** high.
 
 **Location:** `lazyflow-http/src/sse.rs:187-207,221-223`.
 
-**Observed:** valid `é` split between HTTP body chunks fails UTF-8 validation;
+**Observed:** valid `\u{e9}` (U+00E9) split between HTTP body chunks fails UTF-8 validation;
 `data: hello\r\r` produces no event and ends with `PipeError::Closed`.
 
 **Cause:** each transport chunk is decoded independently, and only LF is
@@ -328,7 +335,7 @@ Retain a real HTTP fragmentation regression as well as parser unit tests.
 **Proofs:** `sse_accepts_utf8_split_across_transport_chunks`,
 `sse_accepts_cr_only_line_endings`.
 
-### F8 — SSE ID-only frames lose resume state
+### F8: SSE ID-only frames lose resume state
 
 **Priority:** high.
 
@@ -353,7 +360,7 @@ incomplete frames at EOF follow the protocol's dispatch rules.
 **Proof:** `sse_resume_tracks_id_only_frames`. Replay duplication is a potential
 application consequence, not something the local test measured.
 
-### F9 — Default Stream adapter waits for a full internal batch
+### F9: Default Stream adapter waits for a full internal batch
 
 **Priority:** medium; clarify intended contract.
 
@@ -379,7 +386,7 @@ buffer size 1; no busy loop when an empty stream is pending.
 
 **Proof:** `stream_adapter_emits_available_item_without_waiting_for_256`.
 
-### F10 — chunks exposes internal source boundaries
+### F10: chunks exposes internal source boundaries
 
 **Priority:** medium.
 
@@ -402,7 +409,7 @@ exact multiples. Assert batch boundaries as well as flattened output.
 
 **Proof:** `chunks_only_emits_partial_batch_at_end`.
 
-### F11 — Option-based termination does not persist
+### F11: Option-based termination does not persist
 
 **Priority:** medium.
 
@@ -424,7 +431,7 @@ termination. Keep ordinary EOF distinct from an element-level sentinel.
 
 **Proof:** `un_none_terminate_stays_terminated_across_chunks`.
 
-### F12 — throttle emits delayed bursts
+### F12: throttle emits delayed bursts
 
 **Priority:** medium.
 
@@ -448,7 +455,7 @@ termination. Total collection duration alone is insufficient.
 
 **Proof:** `throttle_spaces_downstream_elements`.
 
-### F13 — Zero-sized timed batches make no progress
+### F13: Zero-sized timed batches make no progress
 
 **Priority:** medium.
 
@@ -470,7 +477,7 @@ Ensure every emitted batch is nonempty and finite sources terminate.
 
 **Proof:** `zero_sized_timeout_batch_does_not_invent_items`.
 
-### F14 — Delimited oversized lines bypass length limits
+### F14: Delimited oversized lines bypass length limits
 
 **Priority:** medium; input-boundary hardening.
 
@@ -498,7 +505,7 @@ limit, and the documented default 1 MiB bound.
 
 **Proof:** `lines_limit_applies_to_newline_terminated_lines`.
 
-### F15 — Interleave ordering depends on source chunk sizes
+### F15: Interleave ordering depends on source chunk sizes
 
 **Priority:** medium.
 
@@ -522,7 +529,7 @@ simple element-level round-robin reference.
 
 **Proof:** `interleave_is_independent_of_source_chunk_boundaries`.
 
-### F16 — Bare-return pipe_fn cannot contain await
+### F16: Bare-return pipe_fn cannot contain await
 
 **Priority:** medium.
 
@@ -549,7 +556,7 @@ one such test after the fix.
 
 **Proof:** `examples/audit_macro_async.rs` and `macro-proof.log` in the proof worktree.
 
-### H1 — SSE has no aggregate event-size bound
+### H1: SSE has no aggregate event-size bound
 
 **Priority:** high when consuming untrusted endpoints; resource-hardening gap.
 
