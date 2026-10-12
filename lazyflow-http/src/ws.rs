@@ -89,7 +89,9 @@ impl WsMessage {
 ///
 /// Sends are delivered via an internal channel to the write task,
 /// decoupling user sends from protocol-level pong responses.
-/// The sender returns `PipeError::Closed` once the connection is gone.
+/// The connection lives as long as the incoming pipe: once that pipe
+/// ends or is dropped, the socket closes and sends return
+/// `PipeError::Closed`.
 #[derive(Clone)]
 pub struct WsSender {
     tx: tokio::sync::mpsc::Sender<OutgoingMsg>,
@@ -155,10 +157,14 @@ pub fn connect(url: impl Into<String>) -> (Pipe<WsMessage>, WsSender) {
         let (write_half, mut read_half) = futures_util::StreamExt::split(stream);
         let write_half = Arc::new(tokio::sync::Mutex::new(write_half));
 
-        // Writer task: drains both user sends and pong responses
+        // Writer task: drains both user sends and pong responses. Held in a
+        // JoinSet, which aborts it on drop, so the writer and its half of
+        // the socket go away however the read loop ends, cancellation
+        // included.
         let writer = Arc::clone(&write_half);
         let mut outgoing_rx = outgoing_rx;
-        let write_handle = tokio::spawn(async move {
+        let mut writer_task = tokio::task::JoinSet::new();
+        writer_task.spawn(async move {
             use futures_util::SinkExt;
             while let Some(msg) = outgoing_rx.recv().await {
                 let ws_msg = match msg {
@@ -217,7 +223,7 @@ pub fn connect(url: impl Into<String>) -> (Pipe<WsMessage>, WsSender) {
         }
         .await;
 
-        write_handle.abort();
+        drop(writer_task);
         result
     });
 

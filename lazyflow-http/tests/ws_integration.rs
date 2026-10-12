@@ -76,7 +76,9 @@ async fn ws_bidirectional_echo() {
             sender.send_text(format!("hello-{i}")).await.unwrap();
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
-        sender.close().await.unwrap();
+        // The connection ends with the incoming pipe; once take(3) is
+        // satisfied there may be nothing left to close.
+        let _ = sender.close().await;
     });
 
     let replies: Vec<String> = incoming
@@ -221,4 +223,53 @@ async fn ws_sender_detects_closed_connection() {
     // Sender should fail after connection is gone
     let result = sender.send_text("should fail").await;
     assert!(result.is_err());
+}
+
+/// Sends one message, then reports whether the client shut the connection
+/// down within a second (close frame, error, or end of stream).
+async fn hello_then_watch_for_shutdown() -> (SocketAddr, tokio::sync::oneshot::Receiver<bool>) {
+    let (shut_tx, shut_rx) = tokio::sync::oneshot::channel();
+    let shut_tx = std::sync::Arc::new(std::sync::Mutex::new(Some(shut_tx)));
+    let app = Router::new().route(
+        "/ws",
+        get(move |upgrade: WebSocketUpgrade| async move {
+            upgrade.on_upgrade(move |mut socket: WebSocket| async move {
+                let _ = socket.send(Message::Text("hello".into())).await;
+                let watch = async {
+                    loop {
+                        match socket.recv().await {
+                            Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return,
+                            Some(Ok(_)) => continue,
+                        }
+                    }
+                };
+                let shut = tokio::time::timeout(Duration::from_secs(1), watch)
+                    .await
+                    .is_ok();
+                if let Some(tx) = shut_tx.lock().unwrap().take() {
+                    let _ = tx.send(shut);
+                }
+            })
+        }),
+    );
+    let (addr, _server) = start_server(app).await;
+    (addr, shut_rx)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ws_connection_shuts_down_when_first_returns() {
+    let (addr, shut) = hello_then_watch_for_shutdown().await;
+    let (incoming, sender) = ws::connect(format!("ws://{addr}/ws"));
+    assert!(incoming.first().await.unwrap().is_some());
+    assert!(shut.await.unwrap(), "the server still had a live peer");
+    assert!(sender.send_text("after-drop").await.is_err());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ws_connection_shuts_down_when_take_is_satisfied() {
+    let (addr, shut) = hello_then_watch_for_shutdown().await;
+    let (incoming, sender) = ws::connect(format!("ws://{addr}/ws"));
+    assert_eq!(incoming.take(1).collect().await.unwrap().len(), 1);
+    assert!(shut.await.unwrap(), "the server still had a live peer");
+    assert!(sender.send_text("after-drop").await.is_err());
 }
