@@ -113,7 +113,8 @@ impl<B: Send + 'static> Pipe<B> {
     ///
     /// Collects up to `max_size` elements into a `Vec<B>`. If the
     /// deadline elapses before the batch is full, flushes whatever
-    /// has accumulated. Spawns a background task at materialization.
+    /// has accumulated. Timer flushes do not cancel an in-flight upstream
+    /// pull. Spawns a background task at materialization.
     pub fn chunks_timeout(self, max_size: usize, timeout: std::time::Duration) -> Pipe<Vec<B>> {
         let parent = self.factory;
         Pipe::from_factory(move || {
@@ -123,52 +124,51 @@ impl<B: Send + 'static> Pipe<B> {
                 let report_tx = tx.clone();
                 crate::panic::report_panic(&report_tx, async move {
                     let mut batch = Vec::with_capacity(max_size);
+                    let deadline = tokio::time::sleep(timeout);
+                    tokio::pin!(deadline);
+
                     loop {
-                        let deadline = tokio::time::sleep(timeout);
-                        tokio::pin!(deadline);
-
-                        // Pull chunks until batch is full or deadline fires
-                        loop {
-                            // Flush any complete batches already buffered
-                            while batch.len() >= max_size {
-                                let ready = batch.drain(..max_size).collect();
-                                if tx.send(Ok(ready)).await.is_err() {
-                                    return;
-                                }
+                        // Flush any complete batches already buffered.
+                        while batch.len() >= max_size {
+                            let ready = batch.drain(..max_size).collect();
+                            if tx.send(Ok(ready)).await.is_err() {
+                                return;
                             }
+                        }
 
+                        // A pull may own consumed data while pending. Timer ticks
+                        // must resume that same future rather than cancel it.
+                        let mut next_chunk = root.next_chunk();
+                        let result = loop {
                             tokio::select! {
                                 biased;
-                                result = root.next_chunk() => {
-                                    match result {
-                                        Ok(Some(chunk)) => {
-                                            batch.extend(chunk);
-                                            // Loop back to flush any full batches
-                                        }
-                                        Ok(None) => {
-                                            // Source exhausted -- flush remainder
-                                            if !batch.is_empty() {
-                                                let _ = tx.send(Ok(std::mem::take(&mut batch))).await;
-                                            }
-                                            return;
-                                        }
-                                        Err(e) => {
-                                            if !batch.is_empty() {
-                                                let _ = tx.send(Ok(std::mem::take(&mut batch))).await;
-                                            }
-                                            let _ = tx.send(Err(e)).await;
-                                            return;
-                                        }
-                                    }
-                                }
+                                result = &mut next_chunk => break result,
                                 _ = &mut deadline => {
-                                    // Timer fired -- flush partial batch
                                     if !batch.is_empty() {
-                                        if tx.send(Ok(std::mem::take(&mut batch))).await.is_err() { return; }
+                                        if tx.send(Ok(std::mem::take(&mut batch))).await.is_err() {
+                                            return;
+                                        }
                                         batch = Vec::with_capacity(max_size);
                                     }
-                                    break; // Reset timer
+                                    deadline.set(tokio::time::sleep(timeout));
                                 }
+                            }
+                        };
+
+                        match result {
+                            Ok(Some(chunk)) => batch.extend(chunk),
+                            Ok(None) => {
+                                if !batch.is_empty() {
+                                    let _ = tx.send(Ok(std::mem::take(&mut batch))).await;
+                                }
+                                return;
+                            }
+                            Err(e) => {
+                                if !batch.is_empty() {
+                                    let _ = tx.send(Ok(std::mem::take(&mut batch))).await;
+                                }
+                                let _ = tx.send(Err(e)).await;
+                                return;
                             }
                         }
                     }
