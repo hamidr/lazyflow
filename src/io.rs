@@ -98,6 +98,38 @@ impl PullLines {
     }
 }
 
+impl PullLines {
+    /// Splits `buf` into lines, appending to the unfinished `remainder`.
+    /// Fails as soon as a line's payload, the bytes before `\n` or
+    /// `\r\n`, exceeds the limit, terminated or not.
+    fn split_into(&mut self, buf: &[u8], lines: &mut Vec<String>) -> Result<(), PipeError> {
+        let mut rest = buf;
+        while let Some(newline) = rest.iter().position(|&b| b == b'\n') {
+            self.remainder.extend_from_slice(&rest[..newline]);
+            rest = &rest[newline + 1..];
+            let mut line = std::mem::take(&mut self.remainder);
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            self.check_len(line.len())?;
+            lines.push(String::from_utf8_lossy(&line).into_owned());
+        }
+        self.remainder.extend_from_slice(rest);
+        // A trailing CR may turn out to start the line's CRLF.
+        let pending_cr = self.remainder.last() == Some(&b'\r');
+        self.check_len(self.remainder.len() - usize::from(pending_cr))
+    }
+
+    fn check_len(&self, len: usize) -> Result<(), PipeError> {
+        if len > self.max_line_len {
+            return Err(PipeError::Custom(
+                format!("line exceeds max length of {} bytes", self.max_line_len).into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl PullOperator<String> for PullLines {
     fn next_chunk(&mut self) -> ChunkFut<'_, String> {
         Box::pin(async move {
@@ -106,12 +138,7 @@ impl PullOperator<String> for PullLines {
                     if self.remainder.is_empty() {
                         return Ok(None);
                     }
-                    if self.remainder.len() > self.max_line_len {
-                        return Err(PipeError::Custom(
-                            format!("line exceeds max length of {} bytes", self.max_line_len)
-                                .into(),
-                        ));
-                    }
+                    self.check_len(self.remainder.len())?;
                     let line = String::from_utf8_lossy(&self.remainder).into_owned();
                     self.remainder.clear();
                     return Ok(Some(vec![line]));
@@ -119,41 +146,10 @@ impl PullOperator<String> for PullLines {
 
                 match self.child.next_chunk().await? {
                     Some(buffers) => {
-                        for buf in buffers {
-                            self.remainder.extend_from_slice(&buf);
-                        }
-
-                        if self.remainder.len() > self.max_line_len
-                            && !self.remainder.contains(&b'\n')
-                        {
-                            return Err(PipeError::Custom(
-                                format!("line exceeds max length of {} bytes", self.max_line_len)
-                                    .into(),
-                            ));
-                        }
-
                         let mut lines = Vec::new();
-                        let mut start = 0;
-                        while let Some(rel_pos) =
-                            self.remainder[start..].iter().position(|&b| b == b'\n')
-                        {
-                            let newline = start + rel_pos;
-                            // Strip \r\n or \n
-                            let end = if newline > start && self.remainder[newline - 1] == b'\r' {
-                                newline - 1
-                            } else {
-                                newline
-                            };
-                            lines.push(
-                                String::from_utf8_lossy(&self.remainder[start..end]).into_owned(),
-                            );
-                            start = newline + 1;
+                        for buf in buffers {
+                            self.split_into(&buf, &mut lines)?;
                         }
-                        // Remove consumed bytes in one operation
-                        if start > 0 {
-                            self.remainder.drain(..start);
-                        }
-
                         if !lines.is_empty() {
                             return Ok(Some(lines));
                         }
@@ -193,8 +189,8 @@ impl Pipe<Vec<u8>> {
     /// Split byte buffers into lines (`\n` or `\r\n` delimited).
     ///
     /// Handles lines split across read boundaries. The final line is
-    /// emitted even without a trailing newline. Lines longer than
-    /// 1 MiB return an error; use
+    /// emitted even without a trailing newline. A line whose content,
+    /// not counting `\n` or `\r\n`, exceeds 1 MiB returns an error; use
     /// [`lines_with_max_len`](Self::lines_with_max_len) to customize.
     ///
     /// **Encoding**: uses lossy UTF-8 conversion
@@ -209,8 +205,8 @@ impl Pipe<Vec<u8>> {
 
     /// Like [`lines`](Self::lines) but with a custom max line length.
     ///
-    /// Returns `PipeError::Custom` if any single line exceeds
-    /// `max_len` bytes without a newline delimiter.
+    /// Returns `PipeError::Custom` if any line's content, not counting
+    /// `\n` or `\r\n`, exceeds `max_len` bytes.
     pub fn lines_with_max_len(self, max_len: usize) -> Pipe<String> {
         let parent = self.factory;
         Pipe::from_factory(move || Box::new(PullLines::with_max_len(parent(), max_len)))
