@@ -1012,11 +1012,20 @@ impl<B: Send + 'static> Drop for PullConcurrently<B> {
 impl<B: Send + 'static> PullOperator<B> for PullConcurrently<B> {
     fn next_chunk(&mut self) -> ChunkFut<'_, B> {
         Box::pin(async move {
-            // Check for background error before each pull
             if let Some(e) = &*self.bg_error.borrow() {
                 return Err(e.clone().into_pipe_error());
             }
-            self.inner.next_chunk().await
+            // The main pull keeps running while the background is quiet. A
+            // background that finished cleanly drops its sender, which
+            // disables the failure branch rather than ending the pull.
+            let main = self.inner.next_chunk();
+            tokio::select! {
+                biased;
+                chunk = main => chunk,
+                Ok(failure) = self.bg_error.wait_for(Option::is_some) => {
+                    Err(failure.clone().expect("waited for a failure").into_pipe_error())
+                }
+            }
         })
     }
 }
