@@ -31,12 +31,12 @@ assert_eq!(result, vec![20, 40, 60]);
 
 ```toml
 [dependencies]
-lazyflow = { git = "https://github.com/hamidr/lazyflow" }
+lazyflow = "0.13"
 
 # Optional crates:
-lazyflow-io = { git = "https://github.com/hamidr/lazyflow" }    # File, TCP, UDP
-lazyflow-http = { git = "https://github.com/hamidr/lazyflow" }   # SSE, WebSocket
-lazyflow-grpc = { git = "https://github.com/hamidr/lazyflow" }   # gRPC streaming
+lazyflow-io = "0.13"    # File, TCP, UDP
+lazyflow-http = "0.13"  # SSE, WebSocket
+lazyflow-grpc = "0.13"  # gRPC streaming
 ```
 
 Requires **Tokio** as the async runtime.
