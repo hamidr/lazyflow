@@ -54,6 +54,10 @@ pub struct SseConfig {
     pub initial_reconnect_delay: Duration,
     /// Resume from this event ID on first connect.
     pub last_event_id: Option<String>,
+    /// Most bytes an event may hold while it is read: its data, type and
+    /// ID plus the line in progress. A server exceeding it ends the pipe
+    /// with an error, without reconnecting. Default: 16 MiB.
+    pub max_event_size: usize,
 }
 
 impl Default for SseConfig {
@@ -65,6 +69,7 @@ impl Default for SseConfig {
             max_reconnect_delay: Duration::from_secs(30),
             initial_reconnect_delay: Duration::from_secs(1),
             last_event_id: None,
+            max_event_size: 16 * 1024 * 1024,
         }
     }
 }
@@ -84,7 +89,8 @@ pub fn connect(url: impl Into<String>) -> Pipe<SseEvent> {
 pub fn connect_with(config: SseConfig) -> Pipe<SseEvent> {
     Pipe::generate_once(move |tx| async move {
         let client = reqwest::Client::new();
-        let mut parser = EventStreamParser::resuming_from(config.last_event_id.clone());
+        let mut parser =
+            EventStreamParser::new(config.last_event_id.clone(), config.max_event_size);
         let mut reconnect_delay = config.initial_reconnect_delay;
         let mut first_connect = true;
 
@@ -145,12 +151,20 @@ pub fn connect_with(config: SseConfig) -> Pipe<SseEvent> {
             let result =
                 read_event_stream(&tx, response, &mut parser, &mut reconnect_delay, &config).await;
             match result {
-                Ok(()) => return Ok(()),
-                Err(_) if config.reconnect => continue,
-                Err(e) => return Err(e),
+                StreamEnd::Disconnected(_) if config.reconnect => continue,
+                StreamEnd::Disconnected(e) | StreamEnd::Fatal(e) => return Err(e),
             }
         }
     })
+}
+
+/// Why reading one response's event stream stopped.
+enum StreamEnd {
+    /// The connection failed or closed; reconnecting may resume it.
+    Disconnected(PipeError),
+    /// Reconnecting would not help: the server sent an oversized event,
+    /// or the consumer is gone.
+    Fatal(PipeError),
 }
 
 /// Read and parse the SSE event stream from an HTTP response.
@@ -160,7 +174,7 @@ async fn read_event_stream(
     parser: &mut EventStreamParser,
     reconnect_delay: &mut Duration,
     config: &SseConfig,
-) -> Result<(), PipeError> {
+) -> StreamEnd {
     use futures_core::Stream;
     use std::pin::Pin;
 
@@ -173,16 +187,21 @@ async fn read_event_stream(
         };
         let bytes = match chunk {
             Some(Ok(bytes)) => bytes,
-            Some(Err(e)) => return Err(PipeError::Custom(Box::new(e))),
-            None => return Err(PipeError::Closed),
+            Some(Err(e)) => return StreamEnd::Disconnected(PipeError::Custom(Box::new(e))),
+            None => return StreamEnd::Disconnected(PipeError::Closed),
         };
 
-        let events = parser.feed(&bytes)?;
+        let events = match parser.feed(&bytes) {
+            Ok(events) => events,
+            Err(e) => return StreamEnd::Fatal(e),
+        };
         if let Some(retry) = parser.take_retry() {
             *reconnect_delay = retry.min(config.max_reconnect_delay);
         }
         for event in events {
-            tx.emit(event).await?;
+            if let Err(e) = tx.emit(event).await {
+                return StreamEnd::Fatal(e);
+            }
         }
     }
 }
@@ -198,5 +217,6 @@ mod tests {
         assert_eq!(config.max_reconnect_delay, Duration::from_secs(30));
         assert_eq!(config.initial_reconnect_delay, Duration::from_secs(1));
         assert!(config.last_event_id.is_none());
+        assert_eq!(config.max_event_size, 16 * 1024 * 1024);
     }
 }

@@ -299,3 +299,34 @@ async fn sse_an_empty_id_clears_the_resume_point() {
     let request = request_after_reconnect("id: 3\ndata: a\n\nid\ndata: b\n\n").await;
     assert!(!request.contains("last-event-id"), "{request}");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sse_an_event_built_from_short_lines_cannot_exceed_the_size_limit() {
+    let line: &'static [u8] = b"data: 0123456789\n";
+    let url = fragmented_sse(vec![line; 10]).await;
+    let events = sse::connect_with(SseConfig {
+        url,
+        max_event_size: 64,
+        initial_reconnect_delay: Duration::from_millis(5),
+        ..Default::default()
+    })
+    .first();
+    let result = tokio::time::timeout(Duration::from_secs(5), events)
+        .await
+        .expect("an oversized event must end the stream, not reconnect");
+    assert!(result.is_err(), "{result:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sse_an_event_within_the_size_limit_is_delivered() {
+    let url = fragmented_sse(vec![b"data: 0123456789\n", b"\n"]).await;
+    let event = sse::connect_with(SseConfig {
+        url,
+        reconnect: false,
+        max_event_size: 64,
+        ..Default::default()
+    })
+    .first()
+    .await;
+    assert_eq!(event.unwrap().unwrap().data, "0123456789");
+}

@@ -12,13 +12,12 @@ use lazyflow::pull::PipeError;
 
 use super::SseEvent;
 
-/// Maximum bytes in one line. Prevents OOM from a server that never
-/// sends a line break.
-const MAX_LINE: usize = 16 * 1024 * 1024;
-
 /// Parser state for an event stream and its reconnections.
 #[derive(Default)]
 pub(super) struct EventStreamParser {
+    /// Bound on the bytes the event under construction retains, the line
+    /// in progress included, so a server cannot grow it without limit.
+    max_event_size: usize,
     /// Set by `id` fields; committed to `last_event_id` at each blank line.
     id_buffer: String,
     /// The resume point sent as `Last-Event-ID`; empty means none.
@@ -46,10 +45,12 @@ struct PendingEvent {
 }
 
 impl EventStreamParser {
-    /// A parser whose stream resumes from `last_event_id`.
-    pub(super) fn resuming_from(last_event_id: Option<String>) -> Self {
+    /// A parser whose stream resumes from `last_event_id` and whose
+    /// events hold at most `max_event_size` bytes.
+    pub(super) fn new(last_event_id: Option<String>, max_event_size: usize) -> Self {
         let last_event_id = last_event_id.unwrap_or_default();
         Self {
+            max_event_size,
             id_buffer: last_event_id.clone(),
             last_event_id,
             ..Self::default()
@@ -59,7 +60,7 @@ impl EventStreamParser {
     /// Starts over for a new connection. Partial input is discarded,
     /// including an unfinished event's `id`; the resume point is kept.
     pub(super) fn restart(&mut self) {
-        *self = Self::resuming_from(self.last_event_id());
+        *self = Self::new(self.last_event_id(), self.max_event_size);
     }
 
     /// The ID to resume from on reconnection, if the server set one.
@@ -67,7 +68,9 @@ impl EventStreamParser {
         Some(self.last_event_id.clone()).filter(|id| !id.is_empty())
     }
 
-    /// Feeds one body fragment and returns the events it completes.
+    /// Feeds one body fragment and returns the events it completes. Fails
+    /// once the event being read exceeds the size limit; the parser must
+    /// then be restarted.
     pub(super) fn feed(&mut self, bytes: &[u8]) -> Result<Vec<SseEvent>, PipeError> {
         let text = self.decode(bytes);
         let mut text = text.as_str();
@@ -86,19 +89,30 @@ impl EventStreamParser {
                     self.after_cr = c == '\r';
                     let line = std::mem::take(&mut self.line);
                     events.extend(self.process_line(&line));
+                    self.check_size(0)?;
                 }
                 c => {
-                    if self.line.len() >= MAX_LINE {
-                        return Err(PipeError::Custom(
-                            format!("SSE line exceeded {MAX_LINE} bytes without a line break")
-                                .into(),
-                        ));
-                    }
+                    self.check_size(c.len_utf8())?;
                     self.line.push(c);
                 }
             }
         }
         Ok(events)
+    }
+
+    /// Fails if retaining `extra` more bytes would exceed the limit.
+    fn check_size(&self, extra: usize) -> Result<(), PipeError> {
+        let event = &self.event;
+        let retained = self.line.len()
+            + event.data.len()
+            + event.event_type.as_ref().map_or(0, String::len)
+            + event.id.as_ref().map_or(0, String::len);
+        if retained + extra > self.max_event_size {
+            return Err(PipeError::Custom(
+                format!("SSE event exceeded {} bytes", self.max_event_size).into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Takes the reconnection time the server last asked for, if any.
@@ -201,16 +215,22 @@ fn parse_field(line: &str) -> Option<(&str, &str)> {
 mod tests {
     use super::*;
 
+    const LIMIT: usize = 1024;
+
+    fn parser() -> EventStreamParser {
+        EventStreamParser::new(None, LIMIT)
+    }
+
     fn parse(text: &str) -> Vec<SseEvent> {
-        EventStreamParser::default().feed(text.as_bytes()).unwrap()
+        parser().feed(text.as_bytes()).unwrap()
     }
 
     /// Feeds `wire` split into two fragments at every byte position and
     /// checks each split yields the same events as the unsplit input.
     fn assert_split_invariant(wire: &[u8]) {
-        let whole = EventStreamParser::default().feed(wire).unwrap();
+        let whole = parser().feed(wire).unwrap();
         for at in 0..=wire.len() {
-            let mut parser = EventStreamParser::default();
+            let mut parser = parser();
             let mut events = parser.feed(&wire[..at]).unwrap();
             events.extend(parser.feed(&wire[at..]).unwrap());
             assert_eq!(events, whole, "split at byte {at}");
@@ -257,7 +277,7 @@ mod tests {
 
     #[test]
     fn retry_sets_the_event_and_the_reconnection_time() {
-        let mut parser = EventStreamParser::default();
+        let mut parser = parser();
         let events = parser.feed(b"data: hello\nretry: 5000\n\n").unwrap();
         assert_eq!(events[0].retry, Some(Duration::from_millis(5000)));
         assert_eq!(parser.take_retry(), Some(Duration::from_millis(5000)));
@@ -296,7 +316,7 @@ mod tests {
     fn a_leading_bom_is_skipped_once() {
         let events = parse("\u{FEFF}data: a\n\n");
         assert_eq!(events[0].data, "a");
-        let mut parser = EventStreamParser::default();
+        let mut parser = parser();
         parser.feed(b"data: a\n\n").unwrap();
         let later = parser.feed("\u{FEFF}data: b\n\n".as_bytes()).unwrap();
         assert!(later.is_empty(), "a later BOM is part of a field name");
@@ -304,9 +324,7 @@ mod tests {
 
     #[test]
     fn invalid_utf8_becomes_replacement_characters() {
-        let events = EventStreamParser::default()
-            .feed(b"data: a\xffb\n\n")
-            .unwrap();
+        let events = parser().feed(b"data: a\xffb\n\n").unwrap();
         assert_eq!(events[0].data, "a\u{FFFD}b");
     }
 
@@ -325,7 +343,7 @@ mod tests {
     }
 
     fn resume_point_after(wire: &str) -> Option<String> {
-        let mut parser = EventStreamParser::default();
+        let mut parser = parser();
         parser.feed(wire.as_bytes()).unwrap();
         parser.last_event_id()
     }
@@ -360,7 +378,7 @@ mod tests {
             resume_point_after("id: 3\n\nid: 4\ndata: x\n"),
             Some("3".into())
         );
-        let mut parser = EventStreamParser::default();
+        let mut parser = parser();
         parser.feed(b"id: 3\n\nid: 4\n").unwrap();
         parser.restart();
         parser.feed(b"data: y\n\n").unwrap();
@@ -369,7 +387,7 @@ mod tests {
 
     #[test]
     fn a_restart_keeps_the_resume_point_and_drops_partial_input() {
-        let mut parser = EventStreamParser::resuming_from(Some("1".into()));
+        let mut parser = EventStreamParser::new(Some("1".into()), LIMIT);
         parser.feed(b"data: cut").unwrap();
         parser.restart();
         let events = parser.feed(b"data: whole\n\n").unwrap();
@@ -378,10 +396,39 @@ mod tests {
     }
 
     #[test]
+    fn an_event_at_the_size_limit_is_dispatched() {
+        // Retained: the line in progress, then its value plus a newline.
+        let value = "x".repeat(LIMIT - "data: ".len());
+        let events = parse(&format!("data: {value}\n\n"));
+        assert_eq!(events[0].data, value);
+    }
+
+    #[test]
     fn a_line_longer_than_the_limit_fails() {
-        let mut parser = EventStreamParser::default();
-        let long = vec![b'x'; MAX_LINE];
-        parser.feed(&long).unwrap();
-        assert!(parser.feed(b"x").is_err());
+        let value = "x".repeat(LIMIT - "data: ".len() + 1);
+        assert!(parser().feed(format!("data: {value}").as_bytes()).is_err());
+    }
+
+    #[test]
+    fn many_short_data_lines_cannot_exceed_the_limit() {
+        let line = "data: 0123456789\n".repeat(LIMIT / 11 + 1);
+        assert!(parser().feed(line.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn the_type_and_id_count_toward_the_limit() {
+        let name = "e".repeat(LIMIT / 2);
+        let wire = format!("event: {name}\nid: {name}\ndata: x\n");
+        assert!(parser().feed(wire.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn the_limit_applies_across_fragments_and_resets_per_event() {
+        let mut parser = parser();
+        let half = format!("data: {}\n", "x".repeat(LIMIT / 2));
+        parser.feed(half.as_bytes()).unwrap();
+        parser.feed(b"\n").unwrap();
+        parser.feed(half.as_bytes()).unwrap();
+        assert!(parser.feed(half.as_bytes()).is_err());
     }
 }
