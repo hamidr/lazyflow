@@ -105,3 +105,65 @@ async fn chunks_timeout_emits_nothing_for_empty_input() {
         .unwrap();
     assert!(batches.is_empty());
 }
+
+const RATE: Duration = Duration::from_millis(40);
+
+/// When each element left `throttle`, measured from the start.
+async fn throttled_at(source: Pipe<i32>, rate: Duration) -> Vec<Duration> {
+    let start = tokio::time::Instant::now();
+    source
+        .throttle(rate)
+        .map(move |_| start.elapsed())
+        .collect()
+        .await
+        .unwrap()
+}
+
+#[tokio::test(start_paused = true)]
+async fn throttle_spaces_the_elements_of_one_source_chunk() {
+    let times = throttled_at(Pipe::from_iter(0..3), RATE).await;
+    assert_eq!(times, [Duration::ZERO, RATE, RATE * 2]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn throttle_spaces_elements_arriving_in_many_small_chunks() {
+    let source = Pipe::once(0).chain(Pipe::once(1)).chain(Pipe::once(2));
+    let times = throttled_at(source, RATE).await;
+    assert_eq!(times, [Duration::ZERO, RATE, RATE * 2]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn throttle_does_not_burst_to_catch_up_after_a_slow_consumer() {
+    const SLOW: Duration = Duration::from_millis(100);
+    let start = tokio::time::Instant::now();
+    let times = Pipe::from_iter(0..3)
+        .throttle(RATE)
+        .map(move |_| start.elapsed())
+        .eval_map(|t| async move {
+            tokio::time::sleep(SLOW).await;
+            Ok(t)
+        })
+        .collect()
+        .await
+        .unwrap();
+    assert!(times.windows(2).all(|w| w[1] - w[0] >= RATE), "{times:?}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn throttle_with_zero_duration_passes_elements_straight_through() {
+    let times = throttled_at(Pipe::from_iter(0..3), Duration::ZERO).await;
+    assert_eq!(times, [Duration::ZERO; 3]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn throttle_waits_only_for_the_elements_taken() {
+    let start = tokio::time::Instant::now();
+    let taken = Pipe::iterate(0, |x| x + 1)
+        .throttle(RATE)
+        .take(2)
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(taken, [0, 1]);
+    assert_eq!(start.elapsed(), RATE);
+}

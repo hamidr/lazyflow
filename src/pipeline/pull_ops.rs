@@ -201,32 +201,43 @@ impl<B: Clone + Send + Sync + 'static> PullOperator<B> for PullIntersperse<B> {
     }
 }
 
+/// Passes on one element per pull, at most one per `duration`. The rest
+/// of a source chunk waits here, so the wait falls between elements as
+/// the consumer sees them rather than inside one delayed batch.
 pub(super) struct PullThrottle<B: Send + 'static> {
-    pub(super) child: Box<dyn PullOperator<B>>,
-    pub(super) duration: std::time::Duration,
-    pub(super) last: Option<tokio::time::Instant>,
+    child: Box<dyn PullOperator<B>>,
+    duration: std::time::Duration,
+    pending: VecDeque<B>,
+    last: Option<tokio::time::Instant>,
+}
+
+impl<B: Send + 'static> PullThrottle<B> {
+    pub(super) fn new(child: Box<dyn PullOperator<B>>, duration: std::time::Duration) -> Self {
+        Self {
+            child,
+            duration,
+            pending: VecDeque::new(),
+            last: None,
+        }
+    }
 }
 
 impl<B: Send + 'static> PullOperator<B> for PullThrottle<B> {
     fn next_chunk(&mut self) -> ChunkFut<'_, B> {
         Box::pin(async move {
-            match self.child.next_chunk().await? {
-                Some(chunk) => {
-                    let mut result = Vec::with_capacity(chunk.len());
-                    for item in chunk {
-                        if let Some(last) = self.last {
-                            let elapsed = tokio::time::Instant::now() - last;
-                            if elapsed < self.duration {
-                                tokio::time::sleep(self.duration - elapsed).await;
-                            }
-                        }
-                        self.last = Some(tokio::time::Instant::now());
-                        result.push(item);
-                    }
-                    Ok(Some(result))
+            while self.pending.is_empty() {
+                match self.child.next_chunk().await? {
+                    Some(chunk) => self.pending.extend(chunk),
+                    None => return Ok(None),
                 }
-                None => Ok(None),
             }
+            if let Some(last) = self.last {
+                tokio::time::sleep_until(last + self.duration).await;
+            }
+            // Spacing counts from the actual emission, so a consumer that
+            // pulls late gets no catch-up burst.
+            self.last = Some(tokio::time::Instant::now());
+            Ok(self.pending.pop_front().map(|item| vec![item]))
         })
     }
 }
