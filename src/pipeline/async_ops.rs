@@ -4,6 +4,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::pull::{PipeError, PullOperator};
+use crate::task::OwnedTask;
 
 use super::Pipe;
 use super::pull_ops::{PullEvalFilter, PullEvalMap, PullEvalTap};
@@ -93,9 +94,8 @@ impl<B: Send + 'static> Pipe<B> {
                 let report_tx = out_tx.clone();
                 crate::panic::report_panic(&report_tx, async move {
                     let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
-                    let mut pending: std::collections::VecDeque<
-                        tokio::task::JoinHandle<Result<C, PipeError>>,
-                    > = std::collections::VecDeque::new();
+                    let mut pending: std::collections::VecDeque<OwnedTask<Result<C, PipeError>>> =
+                        std::collections::VecDeque::new();
                     let mut items: std::collections::VecDeque<B> =
                         std::collections::VecDeque::new();
                     let mut source_done = false;
@@ -118,7 +118,7 @@ impl<B: Send + 'static> Pipe<B> {
                                 Err(_) => return,
                             };
                             let f = Arc::clone(&f);
-                            pending.push_back(tokio::spawn(async move {
+                            pending.push_back(OwnedTask::spawn(async move {
                                 let result = f(item).await;
                                 drop(permit);
                                 result

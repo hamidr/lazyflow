@@ -46,6 +46,7 @@ pub mod pull;
 pub mod signal;
 pub mod sink;
 pub mod stream;
+mod task;
 pub mod topic;
 pub mod transform;
 
