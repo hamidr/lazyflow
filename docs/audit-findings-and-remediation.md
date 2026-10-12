@@ -20,17 +20,23 @@ with regression coverage retained in the repository.
 
 ### Current implementation status
 
-At the time this report was written:
+All 16 findings and H1 are fixed on `fix/audit-streaming`, one commit per
+finding (F4 has a preceding behavior-preserving refactor), each with its
+regression tests. The audit proof suites from the proof worktree pass against
+the branch: 14 of 14 core proofs, 5 of 5 connector proofs, and the F16
+compiler example builds and runs. The workspace gate (`scripts/gate.sh`:
+fmt, clippy with warnings denied, all-features tests, rustdoc with warnings
+denied) passes with 406 tests, 36 ignored.
 
-- Branch: `fix/audit-streaming`; HEAD remains `10ef892`.
-- **F1 is implemented and tested locally, but not committed.** Its changes are in
-  `src/pipeline/time.rs`, `tests/time.rs`, and `models/`.
-- F2–F16 and H1 remain unimplemented.
-- No audit-fix commits have been created. Review tooling was unavailable.
-- This report does not revert or extend the existing F1 implementation.
+Contract choices made while fixing: F9 treats the stream chunk size as a
+maximum; F13 raises size 0 to 1; F14 counts line content without `\n` or
+`\r\n`; H1 adds `SseConfig::max_event_size`, default 16 MiB, and does not
+reconnect after a size violation. F2 now reports an upstream failure after
+the results of earlier items, and F6 ties `WsSender` to the incoming pipe's
+lifetime. `CHANGELOG.md` records the externally visible changes.
 
-Source line references below refer to the audited commit; subsequent fixes can
-shift them.
+Source line references below refer to the audited commit; the fixes shift
+them.
 
 ## Validation and evidence
 
@@ -111,7 +117,7 @@ part of F16.
 
 ### F1 — Timer batching cancels unfinished upstream work
 
-**Priority:** high. **Status:** fixed locally, uncommitted.
+**Priority:** high. **Status:** fixed.
 
 **Location:** `src/pipeline/time.rs:140-174`.
 

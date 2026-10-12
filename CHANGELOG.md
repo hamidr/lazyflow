@@ -4,6 +4,50 @@ All notable changes to the lazyflow workspace are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+- **lazyflow-http** (breaking): `SseConfig` gains `max_event_size`
+  (default 16 MiB), bounding the bytes one event may hold while it is read:
+  data, type and id plus the line in progress. A server exceeding it ends the
+  pipe with an error and is not reconnected to. An exhaustive `SseConfig`
+  struct literal needs the new field; `..Default::default()` covers it.
+- **lazyflow-http**: a WebSocket connection now lives as long as its incoming
+  pipe. Once that pipe ends or is dropped the socket closes and `WsSender`
+  sends fail with `PipeError::Closed`.
+- **lazyflow-http**: SSE decodes invalid UTF-8 to U+FFFD, as the
+  specification requires, instead of failing the stream.
+- **lazyflow**: `par_eval_map` keeps at most `concurrency` results in flight,
+  running or finished but not yet emitted, and reports an upstream failure
+  after the results of the items before it.
+- **lazyflow**: `throttle` passes on one element per pull, so downstream sees
+  each element as soon as its interval allows.
+- **lazyflow**: `from_stream` hands over the items a stream has ready, up to
+  the chunk size, instead of waiting to fill a chunk.
+
+### Fixed
+- **lazyflow**: `chunks_timeout` no longer drops data held by an upstream pull
+  that is still running when the timer fires, and treats size 0 as 1 instead
+  of emitting empty batches forever.
+- **lazyflow**: `par_eval_map` workers are cancelled when the pipe stops or an
+  earlier worker fails, and finished results are emitted while upstream is
+  pending.
+- **lazyflow**: a `broadcast` or `partition` branch dropped before being
+  consumed no longer stalls the other branches.
+- **lazyflow**: a `concurrently` background failure ends a main pull that is
+  waiting.
+- **lazyflow**: `chunks(n)` emits full batches whatever the source chunking;
+  only the last batch may be short.
+- **lazyflow**: `un_none_terminate` stays terminated after the first `None`.
+- **lazyflow**: `interleave` alternates element by element whatever the
+  source chunking.
+- **lazyflow**: `lines()` and `lines_with_max_len` apply the length limit to
+  newline-terminated lines too.
+- **lazyflow-http**: SSE handles characters and CRLF split across body
+  chunks, bare CR line endings, and keeps the `Last-Event-ID` resume point
+  across id-only frames and reconnects; an empty id clears it.
+- **lazyflow-macros**: a bare-return `#[pipe_fn] async fn` may `.await`.
+
 ## [0.12.0] - 2026-10-09
 
 ### Changed
