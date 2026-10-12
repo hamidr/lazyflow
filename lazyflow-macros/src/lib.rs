@@ -155,7 +155,8 @@ pub fn pipe_fn(_attr: TokenStream, item: TokenStream) -> TokenStream {
             TokenStream::from(expanded)
         }
         None => {
-            // Bare return type -- wrap in Ok
+            // Bare return type -- wrap in Ok. The body runs as an async
+            // block so it may await; a `return` in it still yields the value.
             let output_type = match &func.sig.output {
                 ReturnType::Type(_, ty) => ty,
                 ReturnType::Default => panic!("#[pipe_fn] must have a return type"),
@@ -164,7 +165,7 @@ pub fn pipe_fn(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 #vis async fn #fn_name(#input_name: #input_type)
                     -> ::std::result::Result<#output_type, lazyflow::pull::PipeError>
                 {
-                    Ok((|| #body)())
+                    Ok((|| async move #body)().await)
                 }
             };
             TokenStream::from(expanded)

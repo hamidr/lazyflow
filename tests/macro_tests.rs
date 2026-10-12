@@ -304,3 +304,55 @@ async fn pipe_fn_fallible_error() {
         .await;
     assert!(result.is_err());
 }
+
+#[lazyflow::pipe_fn]
+async fn delayed_double(x: i64) -> i64 {
+    tokio::task::yield_now().await;
+    x * 2
+}
+
+#[tokio::test]
+async fn pipe_fn_bare_return_may_await() {
+    let result = pipe![1, 2]
+        .eval_map(delayed_double)
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(result, vec![2, 4]);
+}
+
+#[lazyflow::pipe_fn]
+async fn clamp_after_await(x: i64) -> i64 {
+    tokio::task::yield_now().await;
+    if x > 10 {
+        return 10;
+    }
+    x
+}
+
+#[tokio::test]
+async fn pipe_fn_bare_return_keeps_early_return_after_await() {
+    let result = pipe![5, 50]
+        .eval_map(clamp_after_await)
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(result, vec![5, 10]);
+}
+
+#[lazyflow::pipe_fn]
+async fn parse_after_await(s: String) -> lazyflow::PipeResult<i64> {
+    tokio::task::yield_now().await;
+    Ok(s.parse()?)
+}
+
+#[tokio::test]
+async fn pipe_fn_fallible_return_may_await() {
+    let result = pipe!["7".to_string()]
+        .eval_map(parse_after_await)
+        .eval_map(delayed_double)
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(result, vec![14]);
+}
