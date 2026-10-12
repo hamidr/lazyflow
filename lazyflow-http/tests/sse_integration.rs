@@ -168,3 +168,64 @@ async fn sse_custom_headers() {
 
     assert_eq!(captured.lock().unwrap().as_deref(), Some("test-value"));
 }
+
+/// Serves `fragments` as separate HTTP chunks, pausing between them so
+/// each reaches the client as its own body chunk.
+async fn fragmented_sse(fragments: Vec<&'static [u8]>) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = vec![0u8; 4096];
+        let _ = socket.read(&mut request).await.unwrap();
+        let head = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\
+                    transfer-encoding: chunked\r\n\r\n";
+        socket.write_all(head.as_bytes()).await.unwrap();
+        for fragment in fragments {
+            let frame = [
+                format!("{:x}\r\n", fragment.len()).as_bytes(),
+                fragment,
+                b"\r\n",
+            ]
+            .concat();
+            if socket.write_all(&frame).await.is_err() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let _ = socket.write_all(b"0\r\n\r\n").await;
+    });
+    format!("http://{addr}/events")
+}
+
+async fn first_event(url: String) -> Result<Option<SseEvent>, lazyflow::pull::PipeError> {
+    sse::connect_with(SseConfig {
+        url,
+        reconnect: false,
+        ..Default::default()
+    })
+    .first()
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sse_decodes_a_character_split_across_body_chunks() {
+    let url = fragmented_sse(vec![b"data: \xc3", b"\xa9\n\n"]).await;
+    let event = first_event(url).await.unwrap().unwrap();
+    assert_eq!(event.data, "\u{e9}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sse_accepts_lines_ended_by_a_bare_carriage_return() {
+    let url = fragmented_sse(vec![b"data: hello\r\r"]).await;
+    let event = first_event(url).await.unwrap().unwrap();
+    assert_eq!(event.data, "hello");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sse_treats_a_crlf_split_across_body_chunks_as_one_line_end() {
+    let url = fragmented_sse(vec![b"data: a\r", b"\ndata: b\r", b"\n\r\n"]).await;
+    let event = first_event(url).await.unwrap().unwrap();
+    assert_eq!(event.data, "a\nb");
+}
