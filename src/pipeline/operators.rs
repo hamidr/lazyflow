@@ -292,16 +292,14 @@ impl<B: Send + 'static> Pipe<B> {
         })
     }
 
-    /// Group elements into fixed-size chunks, exposing batch boundaries.
+    /// Group elements into batches of `size`, exposing batch boundaries.
+    ///
+    /// Every batch is full except possibly the last, however the source
+    /// is chunked.
     pub fn chunks(self, size: usize) -> Pipe<Vec<B>> {
         let size = size.max(1);
         let parent = self.factory;
-        Pipe::from_factory(move || {
-            Box::new(PullChunks {
-                child: parent(),
-                size,
-            })
-        })
+        Pipe::from_factory(move || Box::new(PullChunks::new(parent(), size)))
     }
 
     /// Emit overlapping windows of `size` elements.

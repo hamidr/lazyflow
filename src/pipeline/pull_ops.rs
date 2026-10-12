@@ -817,35 +817,46 @@ impl<B: Send + 'static, F: Fn(&B) -> bool + Send + 'static> PullOperator<B>
     }
 }
 
+/// Groups elements into batches of `size`. Elements short of a full batch
+/// wait for the next source chunk, so only the final batch is short.
 pub(super) struct PullChunks<B> {
-    pub(super) child: Box<dyn PullOperator<B>>,
-    pub(super) size: usize,
+    child: Box<dyn PullOperator<B>>,
+    size: usize,
+    pending: VecDeque<B>,
+    done: bool,
+}
+
+impl<B> PullChunks<B> {
+    pub(super) fn new(child: Box<dyn PullOperator<B>>, size: usize) -> Self {
+        Self {
+            child,
+            size,
+            pending: VecDeque::new(),
+            done: false,
+        }
+    }
 }
 
 impl<B: Send + 'static> PullOperator<Vec<B>> for PullChunks<B> {
     fn next_chunk(&mut self) -> ChunkFut<'_, Vec<B>> {
         Box::pin(async move {
-            let mut buffer = Vec::with_capacity(self.size);
-            while buffer.len() < self.size {
+            while !self.done && self.pending.len() < self.size {
                 match self.child.next_chunk().await? {
-                    Some(chunk) => buffer.extend(chunk),
-                    None => break,
+                    Some(chunk) => self.pending.extend(chunk),
+                    None => self.done = true,
                 }
             }
-            if buffer.is_empty() {
+            if self.pending.is_empty() {
                 return Ok(None);
             }
-            // Split buffer into sized groups using drain to avoid re-iteration
-            let num_groups = buffer.len().div_ceil(self.size);
-            let mut groups = Vec::with_capacity(num_groups);
-            while buffer.len() > self.size {
-                let rest = buffer.split_off(self.size);
-                groups.push(std::mem::replace(&mut buffer, rest));
+            let mut batches = Vec::with_capacity(self.pending.len() / self.size + 1);
+            while self.pending.len() >= self.size {
+                batches.push(self.pending.drain(..self.size).collect());
             }
-            if !buffer.is_empty() {
-                groups.push(buffer);
+            if self.done && !self.pending.is_empty() {
+                batches.push(self.pending.drain(..).collect());
             }
-            Ok(Some(groups))
+            Ok(Some(batches))
         })
     }
 }
