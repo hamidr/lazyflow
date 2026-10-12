@@ -9,7 +9,8 @@ use super::Pipe;
 type BroadcastTransform<B> = Box<dyn FnOnce(Pipe<B>) -> Pipe<B> + Send>;
 
 use super::pull_ops::{
-    BroadcastReceiver, GuardedPull, LazyFanOut, LazyPartition, PartitionReceiver,
+    BroadcastReceiver, GuardedPull, LazyBranches, PartitionReceiver, start_broadcast,
+    start_partition,
 };
 
 /// Drain a PullOperator into a chunk-level channel, cancelling on consumer drop.
@@ -121,15 +122,17 @@ impl<B: Send + 'static> Pipe<B> {
             return vec![self];
         }
 
-        // Shared state: initialized once when any branch first materializes.
-        // Each branch gets a pre-assigned index and takes its receiver.
-        let shared = Arc::new(LazyFanOut::new(n, buffer_size, self.factory));
+        let branches = Arc::new(LazyBranches::new(
+            n,
+            buffer_size,
+            start_broadcast(self.factory),
+        ));
 
         (0..n)
             .map(|idx| {
-                let shared = Arc::clone(&shared);
+                let branches = Arc::clone(&branches);
                 Pipe::from_factory(move || {
-                    let (rx, _abort) = shared.take_broadcast_receiver(idx);
+                    let (rx, _abort) = branches.claim(idx);
                     Box::new(BroadcastReceiver { rx, _abort })
                 })
             })
@@ -239,13 +242,17 @@ impl<B: Send + 'static> Pipe<B> {
             return vec![self];
         }
 
-        let shared = Arc::new(LazyPartition::new(n, buffer_size, self.factory, key));
+        let branches = Arc::new(LazyBranches::new(
+            n,
+            buffer_size,
+            start_partition(self.factory, key),
+        ));
 
         (0..n)
             .map(|idx| {
-                let shared = Arc::clone(&shared);
+                let branches = Arc::clone(&branches);
                 Pipe::from_factory(move || {
-                    let (rx, _abort) = shared.take_receiver(idx);
+                    let (rx, _abort) = branches.claim(idx);
                     Box::new(PartitionReceiver { inner: rx, _abort })
                 })
             })

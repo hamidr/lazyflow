@@ -385,24 +385,58 @@ impl<B: Send + 'static> PullOperator<B> for PullChain<B> {
     }
 }
 
-/// Shared state for lazy broadcast. Initialized on first branch access.
-pub(super) struct LazyFanOut<B: Send + 'static> {
-    n: usize,
-    buffer_size: usize,
-    source_factory: Arc<dyn Fn() -> Box<dyn PullOperator<B>> + Send + Sync>,
-    state: std::sync::OnceLock<LazyFanOutState<B>>,
-}
-
 /// What a fan-out branch reads: a chunk, or the source's error.
 type BranchItem<B> = Result<B, crate::panic::SharedError>;
 
+type BranchSenders<T> = Vec<Option<tokio::sync::mpsc::Sender<BranchItem<T>>>>;
+
+type BranchReceiver<T> = tokio::sync::mpsc::Receiver<BranchItem<T>>;
+
 /// A branch's receiver and the source guard every branch shares.
-type Branch<T> = (tokio::sync::mpsc::Receiver<BranchItem<T>>, Arc<SharedAbort>);
+type Branch<T> = (BranchReceiver<T>, Arc<SharedAbort>);
 
-type FanOutReceivers<B> = std::sync::Mutex<Vec<Option<Branch<Arc<Vec<B>>>>>>;
+/// Spawns a fan-out's source feeding the given branch senders.
+pub(super) type StartFanOut<T> =
+    Box<dyn FnOnce(BranchSenders<T>) -> tokio::task::AbortHandle + Send>;
 
-struct LazyFanOutState<B> {
-    receivers: FanOutReceivers<B>,
+/// The branches of a fan-out whose source starts when the first branch is
+/// claimed. Every branch's channel exists from creation, so the source
+/// sees each branch whether or not it has been claimed yet.
+pub(super) struct LazyBranches<T> {
+    receivers: std::sync::Mutex<Vec<Option<BranchReceiver<T>>>>,
+    unstarted: std::sync::Mutex<Option<(StartFanOut<T>, BranchSenders<T>)>>,
+    source: std::sync::OnceLock<Arc<SharedAbort>>,
+}
+
+impl<T: Send + 'static> LazyBranches<T> {
+    pub(super) fn new(n: usize, buffer_size: usize, start: StartFanOut<T>) -> Self {
+        let (senders, receivers) = (0..n)
+            .map(|_| {
+                let (tx, rx) = tokio::sync::mpsc::channel(buffer_size.max(1));
+                (Some(tx), Some(rx))
+            })
+            .unzip();
+        Self {
+            receivers: std::sync::Mutex::new(receivers),
+            unstarted: std::sync::Mutex::new(Some((start, senders))),
+            source: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Starts the source if it has not started, then hands over branch
+    /// `idx`'s receiver.
+    pub(super) fn claim(&self, idx: usize) -> Branch<T> {
+        let source = self.source.get_or_init(|| {
+            let (start, senders) = self.unstarted.lock().unwrap().take().unwrap();
+            // One guard shared by every branch: the source is cancelled
+            // when the last branch is dropped, not the first.
+            SharedAbort::new(start(senders))
+        });
+        let rx = self.receivers.lock().unwrap()[idx]
+            .take()
+            .expect("fan-out branch already consumed");
+        (rx, Arc::clone(source))
+    }
 }
 
 /// Send `item` to every branch still reading, forgetting each branch
@@ -425,163 +459,71 @@ async fn send_to_open<T: Clone>(
     open
 }
 
-impl<B: Clone + Send + Sync + 'static> LazyFanOut<B> {
-    pub(super) fn new(
-        n: usize,
-        buffer_size: usize,
-        source_factory: Arc<dyn Fn() -> Box<dyn PullOperator<B>> + Send + Sync>,
-    ) -> Self {
-        Self {
-            n,
-            buffer_size,
-            source_factory,
-            state: std::sync::OnceLock::new(),
-        }
-    }
-
-    fn ensure_init(&self) -> &LazyFanOutState<B> {
-        self.state.get_or_init(|| {
-            let mut senders = Vec::with_capacity(self.n);
-            let mut receivers = Vec::with_capacity(self.n);
-            for _ in 0..self.n {
-                let (tx, rx) =
-                    tokio::sync::mpsc::channel::<BranchItem<Arc<Vec<B>>>>(self.buffer_size.max(1));
-                senders.push(Some(tx));
-                receivers.push(rx);
-            }
-
-            let mut root = (self.source_factory)();
-            let handle = tokio::spawn(async move {
-                let run = crate::panic::catch_panic(async {
-                    while let Some(chunk) = root.next_chunk().await? {
-                        if send_to_open(&mut senders, &Ok(Arc::new(chunk))).await == 0 {
-                            return Ok(());
-                        }
-                    }
-                    Ok(())
-                });
-                if let Err(e) = run.await.and_then(|r| r) {
-                    let e = Err(crate::panic::SharedError::new(e));
-                    send_to_open(&mut senders, &e).await;
-                }
-            });
-
-            // One guard shared by every branch: the source is cancelled
-            // when the last branch is dropped, not the first.
-            let abort = SharedAbort::new(handle.abort_handle());
-            let receivers = receivers
-                .into_iter()
-                .map(|rx| Some((rx, Arc::clone(&abort))))
-                .collect();
-            LazyFanOutState {
-                receivers: std::sync::Mutex::new(receivers),
-            }
-        })
-    }
-
-    pub(super) fn take_broadcast_receiver(&self, idx: usize) -> Branch<Arc<Vec<B>>> {
-        let state = self.ensure_init();
-        state.receivers.lock().unwrap()[idx]
-            .take()
-            .expect("broadcast branch already consumed")
-    }
-}
-
-/// Shared state for lazy partition. Initialized on first branch access.
-pub(super) struct LazyPartition<B: Send + 'static> {
-    n: usize,
-    buffer_size: usize,
+/// Feeds every chunk of the source to all branches.
+pub(super) fn start_broadcast<B: Clone + Send + Sync + 'static>(
     source_factory: Arc<dyn Fn() -> Box<dyn PullOperator<B>> + Send + Sync>,
-    key: Arc<dyn Fn(&B) -> u64 + Send + Sync>,
-    state: std::sync::OnceLock<LazyPartitionState<B>>,
-}
-
-type PartitionReceivers<B> = std::sync::Mutex<Vec<Option<Branch<Vec<B>>>>>;
-
-struct LazyPartitionState<B> {
-    receivers: PartitionReceivers<B>,
-}
-
-impl<B: Send + 'static> LazyPartition<B> {
-    pub(super) fn new(
-        n: usize,
-        buffer_size: usize,
-        source_factory: Arc<dyn Fn() -> Box<dyn PullOperator<B>> + Send + Sync>,
-        key: impl Fn(&B) -> u64 + Send + Sync + 'static,
-    ) -> Self {
-        Self {
-            n,
-            buffer_size,
-            source_factory,
-            key: Arc::new(key),
-            state: std::sync::OnceLock::new(),
-        }
-    }
-
-    fn ensure_init(&self) -> &LazyPartitionState<B> {
-        self.state.get_or_init(|| {
-            let n = self.n;
-            let mut senders = Vec::with_capacity(n);
-            let mut receivers = Vec::with_capacity(n);
-            for _ in 0..n {
-                let (tx, rx) =
-                    tokio::sync::mpsc::channel::<BranchItem<Vec<B>>>(self.buffer_size.max(1));
-                senders.push(Some(tx));
-                receivers.push(rx);
+) -> StartFanOut<Arc<Vec<B>>> {
+    Box::new(move |mut senders| {
+        let mut root = source_factory();
+        let handle = tokio::spawn(async move {
+            let run = crate::panic::catch_panic(async {
+                while let Some(chunk) = root.next_chunk().await? {
+                    if send_to_open(&mut senders, &Ok(Arc::new(chunk))).await == 0 {
+                        return Ok(());
+                    }
+                }
+                Ok(())
+            });
+            if let Err(e) = run.await.and_then(|r| r) {
+                let e = Err(crate::panic::SharedError::new(e));
+                send_to_open(&mut senders, &e).await;
             }
+        });
+        handle.abort_handle()
+    })
+}
 
-            let mut root = (self.source_factory)();
-            let key = Arc::clone(&self.key);
-            let handle = tokio::spawn(async move {
-                let run = crate::panic::catch_panic(async {
-                    let mut buckets: Vec<Vec<B>> = (0..n).map(|_| Vec::new()).collect();
-                    while let Some(chunk) = root.next_chunk().await? {
-                        for item in chunk {
-                            let idx = key(&item) as usize % n;
-                            buckets[idx].push(item);
-                        }
-                        // A branch whose receiver is gone is forgotten and its
-                        // items dropped; the other branches keep going.
-                        for (slot, bucket) in senders.iter_mut().zip(buckets.iter_mut()) {
-                            let batch = std::mem::take(bucket);
-                            if let (Some(tx), false) = (slot.as_ref(), batch.is_empty()) {
-                                if tx.send(Ok(batch)).await.is_err() {
-                                    *slot = None;
-                                }
+/// Feeds each element of the source to the branch `key(element) % n`.
+pub(super) fn start_partition<B: Send + 'static>(
+    source_factory: Arc<dyn Fn() -> Box<dyn PullOperator<B>> + Send + Sync>,
+    key: impl Fn(&B) -> u64 + Send + Sync + 'static,
+) -> StartFanOut<Vec<B>> {
+    Box::new(move |mut senders| {
+        let n = senders.len();
+        let mut root = source_factory();
+        let handle = tokio::spawn(async move {
+            let run = crate::panic::catch_panic(async {
+                let mut buckets: Vec<Vec<B>> = (0..n).map(|_| Vec::new()).collect();
+                while let Some(chunk) = root.next_chunk().await? {
+                    for item in chunk {
+                        let idx = key(&item) as usize % n;
+                        buckets[idx].push(item);
+                    }
+                    // A branch whose receiver is gone is forgotten and its
+                    // items dropped; the other branches keep going.
+                    for (slot, bucket) in senders.iter_mut().zip(buckets.iter_mut()) {
+                        let batch = std::mem::take(bucket);
+                        if let (Some(tx), false) = (slot.as_ref(), batch.is_empty()) {
+                            if tx.send(Ok(batch)).await.is_err() {
+                                *slot = None;
                             }
                         }
-                        if senders.iter().all(Option::is_none) {
-                            return Ok(());
-                        }
                     }
-                    Ok(())
-                });
-                if let Err(e) = run.await.and_then(|r| r) {
-                    let e = crate::panic::SharedError::new(e);
-                    for tx in senders.iter().flatten() {
-                        let _ = tx.send(Err(e.clone())).await;
+                    if senders.iter().all(Option::is_none) {
+                        return Ok(());
                     }
                 }
+                Ok(())
             });
-
-            let abort = SharedAbort::new(handle.abort_handle());
-            let receivers: Vec<_> = receivers
-                .into_iter()
-                .map(|rx| Some((rx, Arc::clone(&abort))))
-                .collect();
-
-            LazyPartitionState {
-                receivers: std::sync::Mutex::new(receivers),
+            if let Err(e) = run.await.and_then(|r| r) {
+                let e = crate::panic::SharedError::new(e);
+                for tx in senders.iter().flatten() {
+                    let _ = tx.send(Err(e.clone())).await;
+                }
             }
-        })
-    }
-
-    pub(super) fn take_receiver(&self, idx: usize) -> Branch<Vec<B>> {
-        let state = self.ensure_init();
-        state.receivers.lock().unwrap()[idx]
-            .take()
-            .expect("partition branch already consumed")
-    }
+        });
+        handle.abort_handle()
+    })
 }
 
 /// Groups consecutive elements with the same key.
@@ -649,7 +591,7 @@ where
 /// Partition receiver that holds a ref-counted abort guard.
 /// Source task is only cancelled when ALL partition branches are dropped.
 pub(super) struct PartitionReceiver<B: Send + 'static> {
-    pub(super) inner: tokio::sync::mpsc::Receiver<BranchItem<Vec<B>>>,
+    pub(super) inner: BranchReceiver<Vec<B>>,
     pub(super) _abort: Arc<SharedAbort>,
 }
 
@@ -737,7 +679,7 @@ impl SharedAbort {
 /// Holds a ref-counted abort guard so the source task is only cancelled
 /// when ALL branches are dropped.
 pub(super) struct BroadcastReceiver<B> {
-    pub(super) rx: tokio::sync::mpsc::Receiver<BranchItem<Arc<Vec<B>>>>,
+    pub(super) rx: BranchReceiver<Arc<Vec<B>>>,
     pub(super) _abort: Arc<SharedAbort>,
 }
 
