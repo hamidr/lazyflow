@@ -17,10 +17,30 @@ use crate::pull::{ChunkFut, PullOperator};
 /// What one round of [`Pipe::fixpoint`] reads.
 pub struct Round<B> {
     number: usize,
-    /// One segment per earlier round, the last one being the delta.
-    /// Segments are shared, never copied, so handing a round the whole
-    /// set costs one pointer per round rather than one per item.
-    segments: Arc<[Arc<[B]>]>,
+    /// The newest segment, the delta, linked back through every earlier
+    /// round's. Rounds share the links, so starting one costs a pointer
+    /// however many rounds came before, not a copy of the list.
+    newest: Arc<Segment<B>>,
+}
+
+/// The items one round found first, and the segment of the round before.
+struct Segment<B> {
+    items: Arc<[B]>,
+    earlier: Option<Arc<Segment<B>>>,
+}
+
+impl<B> Drop for Segment<B> {
+    /// Unlinks the chain in a loop: the derived drop would recurse once per
+    /// round and overflow the stack on a long fixpoint.
+    fn drop(&mut self) {
+        let mut next = self.earlier.take();
+        while let Some(segment) = next {
+            match Arc::try_unwrap(segment) {
+                Ok(mut inner) => next = inner.earlier.take(),
+                Err(_) => break,
+            }
+        }
+    }
 }
 
 impl<B> Round<B> {
@@ -31,12 +51,19 @@ impl<B> Round<B> {
 
     /// The items first found in the previous round (the seed, in round 1).
     pub fn delta(&self) -> &[B] {
-        self.segments.last().map(|s| &s[..]).unwrap_or(&[])
+        &self.newest.items
     }
 
-    /// Every item found so far, the delta included, each once.
+    /// Every item found so far, the delta included, each once, the earliest
+    /// round's first.
     pub fn full(&self) -> impl Iterator<Item = &B> {
-        self.segments.iter().flat_map(|s| s.iter())
+        let mut segments = Vec::new();
+        let mut at = Some(&*self.newest);
+        while let Some(segment) = at {
+            segments.push(&segment.items[..]);
+            at = segment.earlier.as_deref();
+        }
+        segments.into_iter().rev().flatten()
     }
 }
 
@@ -96,7 +123,7 @@ impl<B: Clone + Eq + Hash + Send + Sync + 'static> Pipe<B> {
                 max_rounds,
                 rounds_run: 0,
                 seen: HashSet::<B, S>::default(),
-                segments: Vec::new(),
+                newest: None,
                 found: Vec::new(),
             })
         })
@@ -110,7 +137,7 @@ struct PullFixpoint<B: Send + 'static, S> {
     max_rounds: Option<usize>,
     rounds_run: usize,
     seen: HashSet<B, S>,
-    segments: Vec<Arc<[B]>>,
+    newest: Option<Arc<Segment<B>>>,
     /// Items the running round found first, the next round's delta.
     found: Vec<B>,
 }
@@ -122,11 +149,15 @@ impl<B: Clone + Eq + Hash + Send + Sync + 'static, S: BuildHasher> PullFixpoint<
         if self.found.is_empty() || self.max_rounds.is_some_and(|m| self.rounds_run >= m) {
             return None;
         }
-        self.segments.push(std::mem::take(&mut self.found).into());
+        let newest = Arc::new(Segment {
+            items: std::mem::take(&mut self.found).into(),
+            earlier: self.newest.take(),
+        });
+        self.newest = Some(newest.clone());
         self.rounds_run += 1;
         let round = Round {
             number: self.rounds_run,
-            segments: self.segments.clone().into(),
+            newest,
         };
         Some((self.step)(round).into_pull())
     }

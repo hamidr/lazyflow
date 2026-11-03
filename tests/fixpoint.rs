@@ -211,3 +211,57 @@ async fn a_caller_chosen_hasher_honours_a_round_bound() {
         .unwrap();
     assert_eq!(out, vec![0, 1, 2]);
 }
+
+#[tokio::test]
+async fn full_lists_the_rounds_in_the_order_they_were_found() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+    Pipe::once(0u64)
+        .fixpoint(move |round| {
+            let full: Vec<u64> = round.full().copied().collect();
+            log.lock().unwrap().push(full);
+            Pipe::from_iter(
+                round
+                    .delta()
+                    .iter()
+                    .filter(|n| **n < 4)
+                    .map(|n| n + 1)
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![
+            vec![0],
+            vec![0, 1],
+            vec![0, 1, 2],
+            vec![0, 1, 2, 3],
+            vec![0, 1, 2, 3, 4],
+        ]
+    );
+}
+
+/// The rounds link back through each other; dropping the last one must not
+/// recurse once per round.
+#[tokio::test]
+async fn a_fixpoint_of_many_rounds_drops_without_overflowing_the_stack() {
+    const ROUNDS: u64 = 200_000;
+    let out = Pipe::once(0u64)
+        .fixpoint(|round| {
+            Pipe::from_iter(
+                round
+                    .delta()
+                    .iter()
+                    .filter(|n| **n + 1 < ROUNDS)
+                    .map(|n| n + 1)
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(out.len() as u64, ROUNDS);
+}

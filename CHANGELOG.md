@@ -4,6 +4,15 @@ All notable changes to the lazyflow workspace are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+- **lazyflow**: `fixpoint` starts each round in constant time. It copied the
+  list of every earlier round's items into the new `Round`, so a fixpoint of
+  `n` rounds cost O(n^2); a chain of 16,000 one-row rounds took 399 ms and now
+  takes 2.6 ms. `Round::full` still yields every item once, earliest round
+  first.
+
 ## [0.13.0] - 2026-10-12
 
 ### Changed

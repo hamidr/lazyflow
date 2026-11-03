@@ -133,6 +133,36 @@ fn bench_merge_two(c: &mut Criterion) {
     });
 }
 
+/// A chain of `n` one-row rounds with a free step, so the time is the driver's
+/// own per-round cost: it must grow about linearly with `n`.
+fn bench_fixpoint_chain(c: &mut Criterion) {
+    let rt = rt();
+    let mut group = c.benchmark_group("fixpoint chain");
+    for n in [1_000u64, 4_000, 16_000] {
+        group.bench_function(format!("{n} rounds"), |b| {
+            b.iter(|| {
+                rt.block_on(async {
+                    let v: Vec<u64> = Pipe::once(0u64)
+                        .fixpoint(move |round| {
+                            let next: Vec<u64> = round
+                                .delta()
+                                .iter()
+                                .filter(|x| **x + 1 < n)
+                                .map(|x| x + 1)
+                                .collect();
+                            Pipe::from_iter(next)
+                        })
+                        .collect()
+                        .await
+                        .unwrap();
+                    black_box(v);
+                });
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_from_iter_collect,
@@ -143,5 +173,6 @@ criterion_group!(
     bench_chunks,
     bench_fold,
     bench_merge_two,
+    bench_fixpoint_chain,
 );
 criterion_main!(benches);
