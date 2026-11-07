@@ -1,8 +1,17 @@
+---
+id: ADR-002
+title: Connector Strategy
+status: accepted
+date: 2026-04-11
+status_date: 2026-04-14
+summary: SSE and WebSocket shipped (Phase 2); Phase 3 Kafka/NATS brokers deferred
+depends_on: []
+supersedes: []
+superseded_by: []
+---
+
 # ADR-002: Connector Strategy -- SSE First, Then WebSocket, Then Brokers
 
-**Status**: Accepted
-**Date**: 2026-04-11
-**Supersedes**: --
 **Related**: [ADR-001](ADR-001-operator-fusion-strategy.md) (deferred in favor of this)
 
 ## Context

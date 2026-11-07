@@ -1,7 +1,16 @@
-# ADR-001: Operator Fusion Strategy
+---
+id: ADR-001
+title: Operator Fusion Strategy
+status: proposed
+date: 2026-04-11
+status_date: 2026-04-14
+summary: Deferred in favor of connectors; revisit after real users
+depends_on: [ADR-002]
+supersedes: []
+superseded_by: []
+---
 
-**Status**: Deferred
-**Date**: 2026-04-11
+# ADR-001: Operator Fusion Strategy
 
 ## Context
 

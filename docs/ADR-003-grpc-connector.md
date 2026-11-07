@@ -1,8 +1,17 @@
+---
+id: ADR-003
+title: gRPC Connector
+status: accepted
+date: 2026-04-11
+status_date: 2026-04-14
+summary: Server streaming source and server response shipped (Phase 1); Phase 2 bidi deferred
+depends_on: [ADR-002]
+supersedes: []
+superseded_by: []
+---
+
 # ADR-003: gRPC Connector -- Server Streaming Source First, Then Bidi
 
-**Status**: Accepted
-**Date**: 2026-04-11
-**Supersedes**: --
 **Related**: [ADR-002](ADR-002-connector-strategy.md) (extends connector strategy with gRPC)
 
 ## Context

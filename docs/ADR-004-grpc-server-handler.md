@@ -1,8 +1,17 @@
+---
+id: ADR-004
+title: gRPC Server Handler
+status: accepted
+date: 2026-04-11
+status_date: 2026-09-30
+summary: Server builder shipped 2026-09-30 (Phase 1); Phase 2 service macro deferred
+depends_on: [ADR-003]
+supersedes: []
+superseded_by: []
+---
+
 # ADR-004: gRPC Server Handler -- Pipe-Native Service Definitions
 
-**Status**: Accepted (Phase 1 shipped 2026-09-30; Phase 2 still deferred)
-**Date**: 2026-04-11
-**Supersedes**: --
 **Related**: [ADR-003](ADR-003-grpc-connector.md) (extends gRPC connector with server-side support)
 
 ## Context
