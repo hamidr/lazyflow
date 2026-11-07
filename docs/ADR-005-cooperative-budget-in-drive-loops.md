@@ -1,7 +1,7 @@
 ---
 id: ADR-005
 title: Cooperative Budget in Pull Drive Loops
-status: proposed
+status: accepted
 date: 2026-11-07
 status_date: 2026-11-07
 summary: One consume_budget helper in drive loops replaces YIELD_AFTER_EMPTY; stops starvation on ready sources
