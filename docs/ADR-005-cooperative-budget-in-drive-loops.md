@@ -173,7 +173,7 @@ deprecated.
 - [x] T3 Use `pull_next` in `PullFilter`, `PullAndThen`, `PullEvalFilter`; delete `YIELD_AFTER_EMPTY` and every `empty_runs`; add the `filter` under `collect` and `first` cases (after: T1)
 - [x] T4 Use `pull_next` in `PullFlatMap`, `PullFlatten`, `PullFixpoint`, `PullDrop`, `PullSkipWhile`, `PullUnNoneTerminate` and the `io.rs` line splitter; add the `fixpoint`, `skip`, `skip_while` cases (after: T3)
 - [x] T5 Use `pull_next` in `PullTopN`, `PullChunks`, `PullSlidingWindow`, `PullGroupAdjacentBy`, `PullThrottle`, `PullZip`; add the `top_n` and `chunks` cases (after: T3)
-- [ ] G1 No starvation: `cargo test --test cooperative_budget` (after: T2, T4, T5)
+- [x] G1 No starvation: `cargo test --test cooperative_budget` (after: T2, T4, T5)
 - [ ] G2 Cost: baseline at `d0bbd7f`, then compare, then noise check (after: T2, T4, T5)
 - [ ] G3 Where `flat_map` and `fixpoint` charge: decide every pull or only on empty (after: G2)
 - [ ] G4 Chunk weight: longest sibling gap at 256, 4096, 65536 rows (after: G1)

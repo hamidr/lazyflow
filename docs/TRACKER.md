@@ -18,4 +18,4 @@ document, then regenerate.
 | [ADR-002](ADR-002-connector-strategy.md) | Connector Strategy | accepted | -- | -- | SSE and WebSocket shipped (Phase 2); Phase 3 Kafka/NATS brokers deferred |  |
 | [ADR-003](ADR-003-grpc-connector.md) | gRPC Connector | accepted | -- | ADR-002 | Server streaming source and server response shipped (Phase 1); Phase 2 bidi deferred |  |
 | [ADR-004](ADR-004-grpc-server-handler.md) | gRPC Server Handler | accepted | -- | ADR-003 | Server builder shipped 2026-09-30 (Phase 1); Phase 2 service macro deferred |  |
-| [ADR-005](ADR-005-cooperative-budget-in-drive-loops.md) | Cooperative Budget in Pull Drive Loops | implementing | 5/13 | -- | One consume_budget helper in drive loops replaces YIELD_AFTER_EMPTY; stops starvation on ready sources |  |
+| [ADR-005](ADR-005-cooperative-budget-in-drive-loops.md) | Cooperative Budget in Pull Drive Loops | implementing | 6/13 | -- | One consume_budget helper in drive loops replaces YIELD_AFTER_EMPTY; stops starvation on ready sources |  |
