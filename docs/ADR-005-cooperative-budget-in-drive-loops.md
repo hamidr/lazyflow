@@ -183,5 +183,5 @@ deprecated.
 - [x] G4 Chunk weight: one unit per pull stays (after: G1)
 - [x] G5 One mechanism: `rg -n 'YIELD_AFTER_EMPTY|empty_runs' src` has no hits (after: T3)
 - [x] G6 Tokio floor: build at tokio 1.44.0 (after: T1)
-- [ ] G7 Project gates: `scripts/gate.sh` prints `gate: ok` (after: G3, G4, G5, G6)
+- [x] G7 Project gates: `gate: ok` (after: G3, G4, G5, G6)
 - [ ] G8 Consumer: knot-exec and knot-client tests with the patch (after: G7)
