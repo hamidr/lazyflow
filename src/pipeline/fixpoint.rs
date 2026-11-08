@@ -12,7 +12,7 @@ use std::hash::{BuildHasher, Hash};
 use std::sync::Arc;
 
 use super::Pipe;
-use crate::pull::{ChunkFut, PullOperator};
+use crate::pull::{ChunkFut, PullOperator, pull_next};
 
 /// What one round of [`Pipe::fixpoint`] reads.
 pub struct Round<B> {
@@ -171,7 +171,7 @@ where
     fn next_chunk(&mut self) -> ChunkFut<'_, B> {
         Box::pin(async move {
             while let Some(current) = self.current.as_mut() {
-                match current.next_chunk().await? {
+                match pull_next(&mut **current).await? {
                     Some(chunk) => {
                         let new: Vec<B> = chunk
                             .into_iter()

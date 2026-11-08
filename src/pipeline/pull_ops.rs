@@ -264,7 +264,7 @@ impl<B: Send + 'static> PullOperator<B> for PullFlatten<B> {
             loop {
                 // Drain current inner pipe
                 if let Some(ref mut inner) = self.inner {
-                    match inner.next_chunk().await? {
+                    match pull_next(&mut **inner).await? {
                         Some(chunk) => return Ok(Some(chunk)),
                         None => {
                             self.inner = None;
@@ -277,7 +277,7 @@ impl<B: Send + 'static> PullOperator<B> for PullFlatten<B> {
                     continue;
                 }
                 // Get next batch of pipes from outer
-                match self.outer.next_chunk().await? {
+                match pull_next(&mut *self.outer).await? {
                     Some(pipes) => {
                         self.pending.extend(pipes);
                     }
@@ -811,7 +811,7 @@ impl<B: Send + 'static, F: Fn(&B) -> bool + Send + 'static> PullOperator<B>
     fn next_chunk(&mut self) -> ChunkFut<'_, B> {
         Box::pin(async move {
             loop {
-                match self.child.next_chunk().await? {
+                match pull_next(&mut *self.child).await? {
                     Some(chunk) => {
                         if !self.skipping {
                             return Ok(Some(chunk));
@@ -1127,7 +1127,7 @@ impl<B: Send + 'static> PullOperator<B> for PullUnNoneTerminate<B> {
     fn next_chunk(&mut self) -> ChunkFut<'_, B> {
         Box::pin(async move {
             while !self.terminated {
-                let Some(chunk) = self.child.next_chunk().await? else {
+                let Some(chunk) = pull_next(&mut *self.child).await? else {
                     return Ok(None);
                 };
                 let mut items = Vec::with_capacity(chunk.len());

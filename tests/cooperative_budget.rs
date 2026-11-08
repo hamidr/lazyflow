@@ -211,3 +211,99 @@ async fn filter_dropping_everything_lets_a_sibling_run_under_first() {
     })
     .await;
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn fixpoint_over_repeated_values_lets_a_sibling_run() {
+    sibling_runs_early(|p| async move {
+        p.fixpoint(|_| Pipe::empty()).collect().await.unwrap();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn skip_lets_a_sibling_run() {
+    sibling_runs_early(|p| async move {
+        p.skip(usize::MAX).collect().await.unwrap();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn skip_while_lets_a_sibling_run() {
+    sibling_runs_early(|p| async move {
+        p.skip_while(|_| true).collect().await.unwrap();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn flat_map_into_nothing_lets_a_sibling_run() {
+    sibling_runs_early(|p| async move {
+        p.flat_map(|_| Pipe::<u64>::empty())
+            .collect()
+            .await
+            .unwrap();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn flatten_of_empty_pipes_lets_a_sibling_run() {
+    sibling_runs_early(|p| async move {
+        p.map(|_| Pipe::<u64>::empty())
+            .flatten()
+            .collect()
+            .await
+            .unwrap();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lines_without_a_newline_lets_a_sibling_run() {
+    sibling_runs_early(|p| async move {
+        p.map(|_| b"a".to_vec()).lines().collect().await.unwrap();
+    })
+    .await;
+}
+
+/// Ready source of empty chunks, which `un_none_terminate` has to skip.
+struct ReadyEmpty {
+    left: usize,
+}
+
+impl PullOperator<Option<u64>> for ReadyEmpty {
+    fn next_chunk(&mut self) -> ChunkFut<'_, Option<u64>> {
+        Box::pin(async move {
+            if self.left == 0 {
+                return Ok(None);
+            }
+            self.left -= 1;
+            Ok(Some(Vec::new()))
+        })
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn un_none_terminate_over_empty_chunks_lets_a_sibling_run() {
+    let seen = Arc::new(AtomicUsize::new(0));
+    let driver = tokio::spawn(async {
+        Pipe::from_pull(|| Box::new(ReadyEmpty { left: 100_000 }))
+            .un_none_terminate()
+            .collect()
+            .await
+            .unwrap();
+    });
+    let sibling = tokio::spawn({
+        let seen = Arc::clone(&seen);
+        async move { seen.store(1, Ordering::Relaxed) }
+    });
+    // The sibling ran before the driver ended iff the driver yielded.
+    sibling.await.unwrap();
+    assert_eq!(seen.load(Ordering::Relaxed), 1);
+    assert!(
+        !driver.is_finished(),
+        "driver ran to its end without yielding"
+    );
+    driver.await.unwrap();
+}

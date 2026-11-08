@@ -144,7 +144,7 @@ impl PullOperator<String> for PullLines {
                     return Ok(Some(vec![line]));
                 }
 
-                match self.child.next_chunk().await? {
+                match pull_next(&mut *self.child).await? {
                     Some(buffers) => {
                         let mut lines = Vec::new();
                         for buf in buffers {

@@ -378,7 +378,7 @@ impl<A: Send + 'static, B: Send + 'static, F: Fn(A) -> crate::pipeline::Pipe<B> 
         Box::pin(async move {
             loop {
                 if let Some(ref mut sub) = self.current_sub {
-                    match sub.next_chunk().await? {
+                    match pull_next(&mut **sub).await? {
                         Some(chunk) => return Ok(Some(chunk)),
                         None => {
                             self.current_sub = None;
@@ -390,7 +390,7 @@ impl<A: Send + 'static, B: Send + 'static, F: Fn(A) -> crate::pipeline::Pipe<B> 
                     self.current_sub = Some(pipe.into_pull());
                     continue;
                 }
-                match self.child.next_chunk().await? {
+                match pull_next(&mut *self.child).await? {
                     Some(chunk) => {
                         self.pending.extend(chunk);
                         continue;
@@ -460,7 +460,7 @@ impl<B: Send + 'static> PullOperator<B> for PullDrop<B> {
     fn next_chunk(&mut self) -> ChunkFut<'_, B> {
         Box::pin(async move {
             loop {
-                match self.child.next_chunk().await? {
+                match pull_next(&mut *self.child).await? {
                     Some(chunk) => {
                         if self.remaining == 0 {
                             return Ok(Some(chunk));
