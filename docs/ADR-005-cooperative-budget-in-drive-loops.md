@@ -1,9 +1,9 @@
 ---
 id: ADR-005
 title: Cooperative Budget in Pull Drive Loops
-status: accepted
+status: implementing
 date: 2026-11-07
-status_date: 2026-11-07
+status_date: 2026-11-08
 summary: One consume_budget helper in drive loops replaces YIELD_AFTER_EMPTY; stops starvation on ready sources
 depends_on: []
 supersedes: []
@@ -165,3 +165,19 @@ deprecated.
   `[patch."https://github.com/hamidr/lazyflow.git"]` pointing at this tree:
   `cargo test -p knot-exec -p knot-client`, then restore `Cargo.toml` and
   `Cargo.lock`. Pass: same results as without the patch.
+
+## Tasks
+
+- [ ] T1 Add `pull_next` to `src/pull.rs`, use it in the `terminals.rs` loops, `collect_all` and `fold_all`; raise the tokio floor to `"1.44"`; add `tests/cooperative_budget.rs` with the `collect`, `fold`, `try_fold_chunks`, `fold_collect` and `timeout` cases
+- [ ] T2 Use `pull_next` in `drain_to_writer`, `concurrently` and `start_partition`; add the `prefetch` case (after: T1)
+- [ ] T3 Use `pull_next` in `PullFilter`, `PullAndThen`, `PullEvalFilter`; delete `YIELD_AFTER_EMPTY` and every `empty_runs`; add the `filter` under `collect` and `first` cases (after: T1)
+- [ ] T4 Use `pull_next` in `PullFlatMap`, `PullFlatten`, `PullFixpoint`, `PullDrop`, `PullSkipWhile`, `PullUnNoneTerminate` and the `io.rs` line splitter; add the `fixpoint`, `skip`, `skip_while` cases (after: T3)
+- [ ] T5 Use `pull_next` in `PullTopN`, `PullChunks`, `PullSlidingWindow`, `PullGroupAdjacentBy`, `PullThrottle`, `PullZip`; add the `top_n` and `chunks` cases (after: T3)
+- [ ] G1 No starvation: `cargo test --test cooperative_budget` (after: T2, T4, T5)
+- [ ] G2 Cost: baseline at `d0bbd7f`, then compare, then noise check (after: T2, T4, T5)
+- [ ] G3 Where `flat_map` and `fixpoint` charge: decide every pull or only on empty (after: G2)
+- [ ] G4 Chunk weight: longest sibling gap at 256, 4096, 65536 rows (after: G1)
+- [ ] G5 One mechanism: `rg -n 'YIELD_AFTER_EMPTY|empty_runs' src` has no hits (after: T3)
+- [ ] G6 Tokio floor: build at tokio 1.44.0 (after: T1)
+- [ ] G7 Project gates: `scripts/gate.sh` prints `gate: ok` (after: G3, G4, G5, G6)
+- [ ] G8 Consumer: knot-exec and knot-client tests with the patch (after: G7)
