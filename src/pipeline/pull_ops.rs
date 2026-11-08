@@ -236,7 +236,7 @@ impl<B: Send + 'static> PullOperator<B> for PullThrottle<B> {
     fn next_chunk(&mut self) -> ChunkFut<'_, B> {
         Box::pin(async move {
             while self.pending.is_empty() {
-                match self.child.next_chunk().await? {
+                match pull_next(&mut *self.child).await? {
                     Some(chunk) => self.pending.extend(chunk),
                     None => return Ok(None),
                 }
@@ -317,7 +317,7 @@ impl<B: Clone + Send + 'static> PullOperator<Vec<B>> for PullSlidingWindow<B> {
                 }
 
                 // Pull more data
-                match self.child.next_chunk().await? {
+                match pull_next(&mut *self.child).await? {
                     Some(chunk) => {
                         self.buffer.extend(chunk);
                     }
@@ -639,7 +639,7 @@ where
                     return Ok(Some(vec![(key, group)]));
                 }
 
-                match self.child.next_chunk().await? {
+                match pull_next(&mut *self.child).await? {
                     Some(chunk) => {
                         self.pending.extend(chunk);
                     }
@@ -862,7 +862,7 @@ impl<B: Send + 'static> PullOperator<Vec<B>> for PullChunks<B> {
     fn next_chunk(&mut self) -> ChunkFut<'_, Vec<B>> {
         Box::pin(async move {
             while !self.done && self.pending.len() < self.size {
-                match self.child.next_chunk().await? {
+                match pull_next(&mut *self.child).await? {
                     Some(chunk) => self.pending.extend(chunk),
                     None => self.done = true,
                 }
@@ -1194,7 +1194,7 @@ impl<B: Send + 'static, K: Ord + Send + 'static> PullOperator<B> for PullTopN<B,
                 self.done = true;
                 return Ok(None);
             }
-            while let Some(chunk) = self.child.next_chunk().await? {
+            while let Some(chunk) = pull_next(&mut *self.child).await? {
                 for item in chunk {
                     let key = (self.key_fn)(&item);
                     self.heap.push(Reverse(Keyed { key, item }));

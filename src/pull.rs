@@ -559,7 +559,7 @@ impl<A: Send + 'static, B: Send + 'static> PullOperator<(A, B)> for PullZip<A, B
         Box::pin(async move {
             // Fill buffers until both have elements or a side is exhausted.
             while self.left_buf.is_empty() && !self.left_done {
-                match self.left.next_chunk().await? {
+                match pull_next(&mut *self.left).await? {
                     Some(chunk) => self.left_buf.extend(chunk),
                     None => {
                         self.left_done = true;
@@ -567,7 +567,7 @@ impl<A: Send + 'static, B: Send + 'static> PullOperator<(A, B)> for PullZip<A, B
                 }
             }
             while self.right_buf.is_empty() && !self.right_done {
-                match self.right.next_chunk().await? {
+                match pull_next(&mut *self.right).await? {
                     Some(chunk) => self.right_buf.extend(chunk),
                     None => {
                         self.right_done = true;

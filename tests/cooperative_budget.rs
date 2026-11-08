@@ -307,3 +307,73 @@ async fn un_none_terminate_over_empty_chunks_lets_a_sibling_run() {
     );
     driver.await.unwrap();
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn top_n_lets_a_sibling_run() {
+    sibling_runs_early(|p| async move {
+        p.top_n(1, |x| *x).collect().await.unwrap();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn chunks_larger_than_the_source_lets_a_sibling_run() {
+    sibling_runs_early(|p| async move {
+        p.chunks(10_000_000).collect().await.unwrap();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn sliding_window_larger_than_the_source_lets_a_sibling_run() {
+    sibling_runs_early(|p| async move {
+        p.sliding_window(10_000_000).collect().await.unwrap();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn group_adjacent_by_one_key_lets_a_sibling_run() {
+    sibling_runs_early(|p| async move {
+        p.group_adjacent_by(|_| 0u8).collect().await.unwrap();
+    })
+    .await;
+}
+
+/// Runs `drive` over a 100k-chunk source of empty chunks; the sibling
+/// must run before the driver ends.
+async fn empty_chunks_let_a_sibling_run<F, Fut>(drive: F)
+where
+    F: FnOnce(Pipe<Option<u64>>) -> Fut,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    let driver = tokio::spawn(drive(Pipe::from_pull(|| {
+        Box::new(ReadyEmpty { left: 100_000 })
+    })));
+    let sibling = tokio::spawn(async {});
+    sibling.await.unwrap();
+    assert!(
+        !driver.is_finished(),
+        "driver ran to its end without yielding"
+    );
+    driver.await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn throttle_over_empty_chunks_lets_a_sibling_run() {
+    empty_chunks_let_a_sibling_run(|p| async move {
+        p.throttle(Duration::from_millis(1))
+            .collect()
+            .await
+            .unwrap();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn zip_with_a_side_of_empty_chunks_lets_a_sibling_run() {
+    empty_chunks_let_a_sibling_run(|p| async move {
+        p.zip(Pipe::from_iter([1u8])).collect().await.unwrap();
+    })
+    .await;
+}
