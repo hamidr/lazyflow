@@ -180,7 +180,7 @@ deprecated.
 - [x] G1 No starvation: `cargo test --test cooperative_budget` (after: T2, T4, T5)
 - [x] G2 Cost: 15.4 ns added per pull in a spawned task, under 20 ns (after: T2, T4, T5)
 - [x] G3 Where `flat_map` and `fixpoint` charge: every pull stays (after: G2)
-- [ ] G4 Chunk weight: longest sibling gap at 256, 4096, 65536 rows (after: G1)
+- [x] G4 Chunk weight: one unit per pull stays (after: G1)
 - [x] G5 One mechanism: `rg -n 'YIELD_AFTER_EMPTY|empty_runs' src` has no hits (after: T3)
 - [x] G6 Tokio floor: build at tokio 1.44.0 (after: T1)
 - [ ] G7 Project gates: `scripts/gate.sh` prints `gate: ok` (after: G3, G4, G5, G6)
