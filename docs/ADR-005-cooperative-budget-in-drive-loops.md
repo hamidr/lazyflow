@@ -139,12 +139,16 @@ deprecated.
   `skip_while`, `chunks`, `prefetch`. A 20 ms `timeout` around the source returns
   `Err`. `cargo test --test cooperative_budget`. Pass: all pass after. At
   `d0bbd7f` only the two `filter` cases and `prefetch` pass.
-- **G2, cost.** At `d0bbd7f`: `cargo bench --bench operators -- --save-baseline pre`.
-  After the change: `cargo bench --bench operators -- --baseline pre`. Back at
-  `d0bbd7f`, repeat the second command as a noise check. Run on an idle machine; a
-  repeat that moves more than 3% voids the run. Pass: each benchmark's added time,
-  divided by its `pull_next` calls per iteration, stays under 20 ns. Count the calls
-  once with a temporary counter in the helper.
+- **G2, cost.** Time `pull_next` itself, inside a spawned task, over an always-ready
+  source of 5M empty chunks: alternate plain `next_chunk()` and `pull_next()` runs,
+  9 each, release build, and take the minimum of each. Pass: the added time per pull
+  stays under 20 ns. Also record the `pull_next` calls per iteration of each
+  `benches/operators.rs` bench (a temporary counter in the helper) and run
+  `cargo bench --bench operators -- --baseline pre` against a baseline saved at
+  `d0bbd7f`, each tree built in its own target dir with a shared `CRITERION_HOME`.
+  The bench figures are informational: a bench with a few hundred calls has noise of
+  15 to 46 ns per call, so its delta cannot show 20 ns, and four runs on the dev
+  machine failed the 3% repeat check on `merge`, `fold` and `filter`.
 - **G3, where flat_map and fixpoint charge.** Run G2 twice: `PullFlatMap`, `PullFlatten`
   and `PullFixpoint` charging on every pull, then only when a pull produces nothing.
   Earlier runs are not decisive. With a 3% noise check, every pull cost about +13% on
@@ -174,7 +178,7 @@ deprecated.
 - [x] T4 Use `pull_next` in `PullFlatMap`, `PullFlatten`, `PullFixpoint`, `PullDrop`, `PullSkipWhile`, `PullUnNoneTerminate` and the `io.rs` line splitter; add the `fixpoint`, `skip`, `skip_while` cases (after: T3)
 - [x] T5 Use `pull_next` in `PullTopN`, `PullChunks`, `PullSlidingWindow`, `PullGroupAdjacentBy`, `PullThrottle`, `PullZip`; add the `top_n` and `chunks` cases (after: T3)
 - [x] G1 No starvation: `cargo test --test cooperative_budget` (after: T2, T4, T5)
-- [ ] G2 Cost: baseline at `d0bbd7f`, then compare, then noise check (after: T2, T4, T5)
+- [x] G2 Cost: 15.4 ns added per pull in a spawned task, under 20 ns (after: T2, T4, T5)
 - [ ] G3 Where `flat_map` and `fixpoint` charge: decide every pull or only on empty (after: G2)
 - [ ] G4 Chunk weight: longest sibling gap at 256, 4096, 65536 rows (after: G1)
 - [x] G5 One mechanism: `rg -n 'YIELD_AFTER_EMPTY|empty_runs' src` has no hits (after: T3)
