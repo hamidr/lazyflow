@@ -178,6 +178,6 @@ deprecated.
 - [ ] G3 Where `flat_map` and `fixpoint` charge: decide every pull or only on empty (after: G2)
 - [ ] G4 Chunk weight: longest sibling gap at 256, 4096, 65536 rows (after: G1)
 - [x] G5 One mechanism: `rg -n 'YIELD_AFTER_EMPTY|empty_runs' src` has no hits (after: T3)
-- [ ] G6 Tokio floor: build at tokio 1.44.0 (after: T1)
+- [x] G6 Tokio floor: build at tokio 1.44.0 (after: T1)
 - [ ] G7 Project gates: `scripts/gate.sh` prints `gate: ok` (after: G3, G4, G5, G6)
 - [ ] G8 Consumer: knot-exec and knot-client tests with the patch (after: G7)
