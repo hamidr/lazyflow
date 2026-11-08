@@ -195,3 +195,19 @@ async fn concurrently_background_lets_a_sibling_run() {
         "sibling waited for {at} background pulls, bound is {SIBLING_BOUND}"
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn filter_dropping_everything_lets_a_sibling_run_under_collect() {
+    sibling_runs_early(|p| async move {
+        p.filter(|_| false).collect().await.unwrap();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn filter_dropping_everything_lets_a_sibling_run_under_first() {
+    sibling_runs_early(|p| async move {
+        p.filter(|_| false).first().await.unwrap();
+    })
+    .await;
+}

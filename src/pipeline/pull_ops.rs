@@ -5,7 +5,7 @@ use std::collections::{BinaryHeap, VecDeque};
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::pull::{ChunkFut, PipeError, PullOperator, YIELD_AFTER_EMPTY, collect_all, pull_next};
+use crate::pull::{ChunkFut, PipeError, PullOperator, collect_all, pull_next};
 
 use super::Pipe;
 
@@ -920,9 +920,8 @@ where
 {
     fn next_chunk(&mut self) -> ChunkFut<'_, B> {
         Box::pin(async move {
-            let mut empty_runs = 0usize;
             loop {
-                match self.child.next_chunk().await? {
+                match pull_next(&mut *self.child).await? {
                     Some(chunk) => {
                         let mut filtered = Vec::new();
                         for item in chunk {
@@ -932,11 +931,6 @@ where
                         }
                         if !filtered.is_empty() {
                             return Ok(Some(filtered));
-                        }
-                        empty_runs += 1;
-                        if empty_runs >= YIELD_AFTER_EMPTY {
-                            empty_runs = 0;
-                            tokio::task::yield_now().await;
                         }
                     }
                     None => return Ok(None),

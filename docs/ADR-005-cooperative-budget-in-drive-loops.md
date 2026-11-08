@@ -170,7 +170,7 @@ deprecated.
 
 - [x] T1 Add `pull_next` to `src/pull.rs`, use it in the `terminals.rs` loops, `collect_all` and `fold_all`; raise the tokio floor to `"1.44"`; add `tests/cooperative_budget.rs` with the `collect`, `fold`, `try_fold_chunks`, `fold_collect` and `timeout` cases
 - [x] T2 Use `pull_next` in `drain_to_writer`, `concurrently` and `start_partition`; add the `prefetch` case (after: T1)
-- [ ] T3 Use `pull_next` in `PullFilter`, `PullAndThen`, `PullEvalFilter`; delete `YIELD_AFTER_EMPTY` and every `empty_runs`; add the `filter` under `collect` and `first` cases (after: T1)
+- [x] T3 Use `pull_next` in `PullFilter`, `PullAndThen`, `PullEvalFilter`; delete `YIELD_AFTER_EMPTY` and every `empty_runs`; add the `filter` under `collect` and `first` cases (after: T1)
 - [ ] T4 Use `pull_next` in `PullFlatMap`, `PullFlatten`, `PullFixpoint`, `PullDrop`, `PullSkipWhile`, `PullUnNoneTerminate` and the `io.rs` line splitter; add the `fixpoint`, `skip`, `skip_while` cases (after: T3)
 - [ ] T5 Use `pull_next` in `PullTopN`, `PullChunks`, `PullSlidingWindow`, `PullGroupAdjacentBy`, `PullThrottle`, `PullZip`; add the `top_n` and `chunks` cases (after: T3)
 - [ ] G1 No starvation: `cargo test --test cooperative_budget` (after: T2, T4, T5)
