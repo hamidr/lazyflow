@@ -6,6 +6,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-08
+
+### Changed
+- **lazyflow**: every drive loop spends one unit of tokio's cooperative
+  budget per pull (ADR-005), so a pipeline over an always-ready source yields
+  its worker and a `timeout` around it fires. This replaces the yield after
+  32 empty chunks in `filter`, `and_then` and `eval_filter`. Each pull costs
+  about 15 ns more; `flat_map` over tiny inner pipes is about 20% slower.
+- **lazyflow**: the tokio floor rises from 1.0 to 1.44, which
+  `consume_budget` needs.
+
 ### Fixed
 - **lazyflow**: `fixpoint` starts each round in constant time. It copied the
   list of every earlier round's items into the new `Round`, so a fixpoint of

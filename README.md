@@ -31,12 +31,12 @@ assert_eq!(result, vec![20, 40, 60]);
 
 ```toml
 [dependencies]
-lazyflow = "0.13"
+lazyflow = "0.14"
 
 # Optional crates:
-lazyflow-io = "0.13"    # File, TCP, UDP
-lazyflow-http = "0.13"  # SSE, WebSocket
-lazyflow-grpc = "0.13"  # gRPC streaming
+lazyflow-io = "0.14"    # File, TCP, UDP
+lazyflow-http = "0.14"  # SSE, WebSocket
+lazyflow-grpc = "0.14"  # gRPC streaming
 ```
 
 Requires **Tokio** as the async runtime.
