@@ -5,7 +5,7 @@ use std::collections::{BinaryHeap, VecDeque};
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::pull::{ChunkFut, PipeError, PullOperator, YIELD_AFTER_EMPTY, collect_all};
+use crate::pull::{ChunkFut, PipeError, PullOperator, YIELD_AFTER_EMPTY, collect_all, pull_next};
 
 use super::Pipe;
 
@@ -558,7 +558,7 @@ pub(super) fn start_partition<B: Send + 'static>(
         let handle = tokio::spawn(async move {
             let run = crate::panic::catch_panic(async {
                 let mut buckets: Vec<Vec<B>> = (0..n).map(|_| Vec::new()).collect();
-                while let Some(chunk) = root.next_chunk().await? {
+                while let Some(chunk) = pull_next(&mut *root).await? {
                     for item in chunk {
                         let idx = key(&item) as usize % n;
                         buckets[idx].push(item);

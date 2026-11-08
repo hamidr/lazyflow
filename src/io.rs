@@ -21,7 +21,7 @@
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use crate::pull::{ChunkFut, PipeError, PullOperator};
+use crate::pull::{ChunkFut, PipeError, PullOperator, pull_next};
 
 const DEFAULT_BUF_SIZE: usize = 8192;
 
@@ -62,7 +62,7 @@ where
     W: AsyncWrite + Unpin + Send,
 {
     let mut total: u64 = 0;
-    while let Some(chunk) = root.next_chunk().await? {
+    while let Some(chunk) = pull_next(root).await? {
         for item in &chunk {
             let bytes = item.as_ref();
             writer.write_all(bytes).await?;

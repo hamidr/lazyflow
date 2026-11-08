@@ -125,3 +125,73 @@ async fn timeout_fires_around_a_ready_source() {
         "timeout did not fire around the pipe"
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn prefetch_lets_a_sibling_run() {
+    sibling_runs_early(|p| async move {
+        p.prefetch(2).collect().await.unwrap();
+    })
+    .await;
+}
+
+/// Like `tokio::io::sink`, but without its own budget accounting.
+struct PlainSink;
+
+impl tokio::io::AsyncWrite for PlainSink {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::task::Poll::Ready(Ok(buf.len()))
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn into_writer_lets_a_sibling_run() {
+    sibling_runs_early(|p| async move {
+        p.map(|_| vec![1u8]).into_writer(PlainSink).await.unwrap();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn concurrently_background_lets_a_sibling_run() {
+    // The main pipe waits on a timer, so the background drain runs alone.
+    let pulls = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::new(AtomicUsize::new(usize::MAX));
+    let main = Pipe::from_iter([1u64]).eval_map(|x| async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        Ok(x)
+    });
+    let driver = tokio::spawn(main.concurrently(ready(&pulls, 100_000)).collect());
+    let sibling = tokio::spawn({
+        let (pulls, seen) = (Arc::clone(&pulls), Arc::clone(&seen));
+        async move {
+            // Let the driver start the background drain first.
+            tokio::task::yield_now().await;
+            seen.store(pulls.load(Ordering::Relaxed), Ordering::Relaxed)
+        }
+    });
+    driver.await.unwrap().unwrap();
+    sibling.await.unwrap();
+    let at = seen.load(Ordering::Relaxed);
+    assert!(
+        at <= SIBLING_BOUND,
+        "sibling waited for {at} background pulls, bound is {SIBLING_BOUND}"
+    );
+}

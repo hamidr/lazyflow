@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::pull::{PipeError, PullOperator, PullZip};
+use crate::pull::{PipeError, PullOperator, PullZip, pull_next};
 
 use super::Pipe;
 
@@ -161,7 +161,7 @@ impl<B: Send + 'static> Pipe<B> {
             let bg_handle = tokio::spawn(async move {
                 let run = crate::panic::catch_panic(async {
                     // Output is discarded; only the end or the error matters.
-                    while bg_root.next_chunk().await?.is_some() {}
+                    while pull_next(&mut *bg_root).await?.is_some() {}
                     Ok(())
                 });
                 if let Err(e) = run.await.and_then(|r| r) {
