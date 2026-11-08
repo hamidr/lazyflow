@@ -605,11 +605,24 @@ impl<A: Send + 'static, B: Send + 'static> PullOperator<(A, B)> for PullZip<A, B
     }
 }
 
+/// Pull one chunk after spending a unit of tokio's cooperative budget.
+///
+/// A pull chain over an always-ready source never returns `Pending`, so the
+/// worker is never given back. Every loop that can pull again without
+/// returning to its caller goes through here, so the budget runs out and the
+/// task yields.
+pub(crate) async fn pull_next<B: Send + 'static>(
+    op: &mut dyn PullOperator<B>,
+) -> Result<Option<Vec<B>>, PipeError> {
+    tokio::task::coop::consume_budget().await;
+    op.next_chunk().await
+}
+
 pub(crate) async fn collect_all<B: Send + 'static>(
     op: &mut dyn PullOperator<B>,
 ) -> Result<Vec<B>, PipeError> {
     let mut all = Vec::new();
-    while let Some(chunk) = op.next_chunk().await? {
+    while let Some(chunk) = pull_next(op).await? {
         if all.is_empty() {
             all = chunk;
         } else {
@@ -626,7 +639,7 @@ pub(crate) async fn fold_all<A: Send + 'static, C, F: Fn(C, A) -> C>(
     f: F,
 ) -> Result<C, PipeError> {
     let mut acc = init;
-    while let Some(chunk) = op.next_chunk().await? {
+    while let Some(chunk) = pull_next(op).await? {
         for item in chunk {
             acc = f(acc, item);
         }

@@ -15,7 +15,7 @@ categories = ["asynchronous", "concurrency"]
 exclude = ["tests/", "examples/", ".github/", ".direnv/", ".envrc"]
 
 [dependencies]
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "time", "net"] }
+tokio = { version = "1.44", features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "time", "net"] }
 futures-core = "0.3"
 lazyflow-macros = { path = "lazyflow-macros", version = "0.13.1" }
 

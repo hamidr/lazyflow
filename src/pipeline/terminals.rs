@@ -3,7 +3,7 @@
 
 use std::collections::VecDeque;
 
-use crate::pull::{PipeError, PullOperator, collect_all, fold_all};
+use crate::pull::{PipeError, PullOperator, collect_all, fold_all, pull_next};
 
 use super::Pipe;
 use super::pull_ops::PullFlatten;
@@ -48,7 +48,7 @@ impl<B: Send + 'static> Pipe<B> {
     ) -> Result<C, PipeError> {
         let mut root = (self.factory)();
         let mut acc = init;
-        while let Some(chunk) = root.next_chunk().await? {
+        while let Some(chunk) = pull_next(&mut *root).await? {
             match f(acc, chunk) {
                 std::ops::ControlFlow::Continue(c) => acc = c,
                 std::ops::ControlFlow::Break(c) => return Ok(c),
@@ -70,7 +70,7 @@ impl<B: Send + 'static> Pipe<B> {
             None => return Ok(None),
         };
         let mut acc = first;
-        while let Some(chunk) = root.next_chunk().await? {
+        while let Some(chunk) = pull_next(&mut *root).await? {
             for item in chunk {
                 acc = f(acc, item);
             }
@@ -82,7 +82,7 @@ impl<B: Send + 'static> Pipe<B> {
     pub async fn count(self) -> Result<usize, PipeError> {
         let mut root = (self.factory)();
         let mut n = 0usize;
-        while let Some(chunk) = root.next_chunk().await? {
+        while let Some(chunk) = pull_next(&mut *root).await? {
             n += chunk.len();
         }
         Ok(n)
@@ -91,7 +91,7 @@ impl<B: Send + 'static> Pipe<B> {
     /// Run a side-effect for each element, discarding the values.
     pub async fn for_each(self, f: impl Fn(B) + Send) -> Result<(), PipeError> {
         let mut root = (self.factory)();
-        while let Some(chunk) = root.next_chunk().await? {
+        while let Some(chunk) = pull_next(&mut *root).await? {
             for item in chunk {
                 f(item);
             }
@@ -105,7 +105,7 @@ impl<B: Send + 'static> Pipe<B> {
         f: impl Fn(B) -> Fut + Send,
     ) -> Result<(), PipeError> {
         let mut root = (self.factory)();
-        while let Some(chunk) = root.next_chunk().await? {
+        while let Some(chunk) = pull_next(&mut *root).await? {
             for item in chunk {
                 f(item).await?;
             }
@@ -126,7 +126,7 @@ impl<B: Send + 'static> Pipe<B> {
     pub async fn last(self) -> Result<Option<B>, PipeError> {
         let mut root = (self.factory)();
         let mut last = None;
-        while let Some(chunk) = root.next_chunk().await? {
+        while let Some(chunk) = pull_next(&mut *root).await? {
             if let Some(item) = chunk.into_iter().last() {
                 last = Some(item);
             }
