@@ -179,7 +179,7 @@ deprecated.
 - [x] T5 Use `pull_next` in `PullTopN`, `PullChunks`, `PullSlidingWindow`, `PullGroupAdjacentBy`, `PullThrottle`, `PullZip`; add the `top_n` and `chunks` cases (after: T3)
 - [x] G1 No starvation: `cargo test --test cooperative_budget` (after: T2, T4, T5)
 - [x] G2 Cost: 15.4 ns added per pull in a spawned task, under 20 ns (after: T2, T4, T5)
-- [ ] G3 Where `flat_map` and `fixpoint` charge: decide every pull or only on empty (after: G2)
+- [x] G3 Where `flat_map` and `fixpoint` charge: every pull stays (after: G2)
 - [ ] G4 Chunk weight: longest sibling gap at 256, 4096, 65536 rows (after: G1)
 - [x] G5 One mechanism: `rg -n 'YIELD_AFTER_EMPTY|empty_runs' src` has no hits (after: T3)
 - [x] G6 Tokio floor: build at tokio 1.44.0 (after: T1)
